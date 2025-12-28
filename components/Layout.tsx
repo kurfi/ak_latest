@@ -1,19 +1,31 @@
 import React from 'react';
-import Sidebar from './Sidebar';
+import { Sidebar } from './Sidebar';
+import { Toast } from './Toast';
+import { useToast } from '../contexts/ToastContext';
 
-interface LayoutProps {
-  children: React.ReactNode;
-}
+const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { toasts, removeToast } = useToast();
 
-const Layout: React.FC<LayoutProps> = ({ children }) => {
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth">
-        <div className="max-w-7xl mx-auto w-full">
+      <main className="flex-1 p-8 ml-64 overflow-y-auto h-screen">
+        <div className="max-w-7xl mx-auto">
           {children}
         </div>
       </main>
+      
+      {/* Global Toast Container */}
+      <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-3">
+        {toasts.map(toast => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            onClose={() => removeToast(toast.id)}
+          />
+        ))}
+      </div>
     </div>
   );
 };
