@@ -1,153 +1,214 @@
-import React, { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import React, { useState, useMemo } from 'react';
 import { db } from '../db/db';
-import { 
-  AlertTriangle, 
-  Calendar, 
-  Search, 
-  Package, 
-  FileText,
-  Filter,
-  ChevronDown,
-  Trash2,
-  AlertCircle
-} from 'lucide-react';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { ReturnedItem, Customer, User } from '../types';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { format } from 'date-fns';
+import { Search, Filter, Calendar, Package, User as UserIcon } from 'lucide-react';
+import { Range } from 'react-date-range';
 
 const DamagedItemsReport: React.FC = () => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateRange, setDateRange] = useState({
-    start: startOfMonth(new Date()),
-    end: endOfMonth(new Date())
+  const [filters, setFilters] = useState({
+    startDate: '',
+    endDate: '',
+    productId: '',
+    staffId: '',
+    searchKeyword: ''
   });
 
-  // Queries
-  const damagedItems = useLiveQuery(() => 
-    db.returnedItems
-      .filter(item => item.restockStatus === 'DAMAGED')
-      .toArray()
-  );
+  const [dateRange, setDateRange] = useState<Range[]>([
+    {
+      startDate: undefined,
+      endDate: undefined,
+      key: 'selection',
+    },
+  ]);
 
-  const returns = useLiveQuery(() => db.returns.toArray());
-  const products = useLiveQuery(() => db.products.toArray());
+  const allReturnedItems = useLiveQuery(() => db.returnedItems.where('restockStatus').equals('damaged').toArray(), []);
+  const allProducts = useLiveQuery(() => db.products.toArray(), []);
+  const allUsers = useLiveQuery(() => db.users.toArray(), []);
+  const allReturns = useLiveQuery(() => db.returns.toArray(), []); // To link staffId
 
-  // Filter items based on date and search term
-  const filteredItems = damagedItems?.filter(item => {
-    const parentReturn = returns?.find(r => r.id === item.returnId);
-    if (!parentReturn) return false;
+  const filteredDamagedItems = useMemo(() => {
+    if (!allReturnedItems) return [];
+
+    let tempItems = allReturnedItems;
+
+    // Date range filter
+    if (dateRange[0]?.startDate && dateRange[0]?.endDate) {
+      const start = dateRange[0].startDate.setHours(0, 0, 0, 0);
+      const end = dateRange[0].endDate.setHours(23, 59, 59, 999);
+      
+      const returnsInDateRange = allReturns?.filter(ret => ret.returnDate.getTime() >= start && ret.returnDate.getTime() <= end).map(ret => ret.id) || [];
+      tempItems = tempItems.filter(item => returnsInDateRange.includes(item.returnId));
+    }
     
-    const returnDate = new Date(parentReturn.returnDate);
-    const isInDateRange = returnDate >= dateRange.start && returnDate <= dateRange.end;
-    const matchesSearch = item.productName.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    return isInDateRange && matchesSearch;
-  });
+    // Product filter
+    if (filters.productId) {
+        tempItems = tempItems.filter(item => item.productId === parseInt(filters.productId));
+    }
 
-  const totalValueLost = filteredItems?.reduce((sum, item) => sum + (item.price * item.quantity), 0) || 0;
+    // Staff filter (requires joining with returns table)
+    if (filters.staffId && allReturns) {
+        const returnsByStaff = allReturns.filter(ret => ret.staffId === parseInt(filters.staffId)).map(ret => ret.id);
+        tempItems = tempItems.filter(item => returnsByStaff.includes(item.returnId));
+    }
+
+    // Search Keyword filter (on product name or returnId)
+    if (filters.searchKeyword) {
+        const keyword = filters.searchKeyword.toLowerCase();
+        tempItems = tempItems.filter(item =>
+            item.productName.toLowerCase().includes(keyword) ||
+            item.returnId.toString().includes(keyword)
+        );
+    }
+
+    // Sort by return date (newest first)
+    return tempItems.sort((a, b) => {
+        const returnA = allReturns?.find(ret => ret.id === a.returnId);
+        const returnB = allReturns?.find(ret => ret.id === b.returnId);
+        return (returnB?.returnDate?.getTime() || 0) - (returnA?.returnDate?.getTime() || 0);
+    });
+  }, [allReturnedItems, filters, dateRange, allReturns]);
+
+  const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setFilters(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleDateChange = (ranges: any) => {
+    setDateRange([ranges.selection]);
+    setFilters(prev => ({
+        ...prev,
+        startDate: ranges.selection.startDate ? format(ranges.selection.startDate, 'yyyy-MM-dd') : '',
+        endDate: ranges.selection.endDate ? format(ranges.selection.endDate, 'yyyy-MM-MM') : '',
+    }));
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Damaged Items</h1>
-          <p className="text-slate-500 text-sm">Tracking inventory value lost due to damage or expiration.</p>
-        </div>
-        <div className="flex items-center gap-3 bg-white p-2 rounded-xl shadow-sm border border-slate-200">
-          <Calendar className="w-4 h-4 text-slate-400 ml-2" />
-          <input 
-            type="date" 
-            className="text-sm outline-none bg-transparent"
-            value={format(dateRange.start, 'yyyy-MM-dd')}
-            onChange={e => setDateRange(prev => ({ ...prev, start: new Date(e.target.value) }))}
-          />
-          <span className="text-slate-300">to</span>
-          <input 
-            type="date" 
-            className="text-sm outline-none bg-transparent"
-            value={format(dateRange.end, 'yyyy-MM-dd')}
-            onChange={e => setDateRange(prev => ({ ...prev, end: new Date(e.target.value) }))}
-          />
-        </div>
-      </div>
+      <h1 className="text-2xl font-bold text-slate-800">Damaged Items Report</h1>
 
-      {/* Summary Banner */}
-      <div className="bg-red-600 rounded-2xl p-6 text-white shadow-xl shadow-red-100 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-white/20 rounded-xl">
-            <AlertTriangle className="w-8 h-8 text-white" />
-          </div>
+      {/* Filters Section */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <h2 className="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2"><Filter className="w-5 h-5" /> Filters</h2>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {/* Date Range Filter */}
           <div>
-            <p className="text-red-100 text-sm font-medium">Total Value Lost (Selected Period)</p>
-            <h2 className="text-3xl font-black">₦{totalValueLost.toLocaleString()}</h2>
-          </div>
-        </div>
-        <div className="hidden md:block text-right">
-          <p className="text-red-100 text-xs font-bold uppercase tracking-widest">Affected Units</p>
-          <p className="text-2xl font-bold">{filteredItems?.reduce((sum, i) => sum + i.quantity, 0) || 0}</p>
-        </div>
-      </div>
-
-      {/* Filters and Search */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row gap-4 items-center">
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <label className="block text-sm font-medium text-slate-700 mb-1">Date Range</label>
+            <div className="relative">
+              <input
+                type="text"
+                readOnly
+                className="w-full pl-10 pr-4 py-2 rounded-lg bg-white border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                value={dateRange[0]?.startDate ? `${format(dateRange[0].startDate, 'MMM dd, yyyy')} - ${format(dateRange[0].endDate!, 'MMM dd, yyyy')}` : 'Select Date Range'}
+                onClick={() => { /* Toggle date picker visibility */ }}
+              />
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            </div>
+            {/* TODO: Implement a proper date range picker modal/popover */}
+             {/* For now, a basic date input until Shadcn UI or similar is integrated for a better picker */}
             <input
-              type="text"
-              placeholder="Search damaged products..."
-              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-red-500 transition-all"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+                type="date"
+                name="startDate"
+                className="w-full border border-slate-200 rounded-lg p-2 text-sm mt-2"
+                value={filters.startDate}
+                onChange={handleFilterChange}
+            />
+            <input
+                type="date"
+                name="endDate"
+                className="w-full border border-slate-200 rounded-lg p-2 text-sm mt-2"
+                value={filters.endDate}
+                onChange={handleFilterChange}
             />
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-slate-400 uppercase tracking-wider">
+          {/* Product Filter */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Product</label>
+            <select
+              name="productId"
+              value={filters.productId}
+              onChange={handleFilterChange}
+              className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="">All Products</option>
+              {allProducts?.map(product => (
+                <option key={product.id} value={product.id}>{product.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Staff Filter */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Staff</label>
+            <select
+              name="staffId"
+              value={filters.staffId}
+              onChange={handleFilterChange}
+              className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="">All Staff</option>
+              {allUsers?.map(user => (
+                <option key={user.id} value={user.id}>{user.username}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Search Keyword */}
+          <div className="col-span-full xl:col-span-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Search Keyword</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4\" />
+              <input
+                type=\"text\"
+                name=\"searchKeyword\"
+                className=\"w-full pl-10 pr-4 py-2 rounded-lg bg-white border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none\"
+                placeholder=\"Search by Product Name/Return ID\"
+                value={filters.searchKeyword}
+                onChange={handleFilterChange}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Damaged Items Table */}
+      <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200 overflow-hidden\">
+        <h2 className=\"text-lg font-semibold text-slate-700 mb-4\">Damaged Items Overview</h2>
+        <div className=\"overflow-x-auto\">
+          <table className=\"min-w-full divide-y divide-slate-200 text-sm\">
+            <thead className=\"bg-slate-50\">
               <tr>
-                <th className="px-6 py-4 font-semibold">Product</th>
-                <th className="px-6 py-4 font-semibold">Date Logged</th>
-                <th className="px-6 py-4 font-semibold">Reason</th>
-                <th className="px-6 py-4 font-semibold">Qty</th>
-                <th className="px-6 py-4 font-semibold text-right">Loss Amount</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Return ID</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Product</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Qty Damaged</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Value Lost</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Date</th>
+                <th className=\"px-4 py-2 text-left text-slate-500 uppercase tracking-wider\">Staff</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredItems?.map(item => {
-                const parentReturn = returns?.find(r => r.id === item.returnId);
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-red-50 rounded-lg">
-                          <Package className="w-4 h-4 text-red-600" />
-                        </div>
-                        <span className="font-bold text-slate-800">{item.productName}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-slate-600">
-                      {parentReturn ? format(parentReturn.returnDate, 'dd MMM, yyyy') : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2 text-slate-500">
-                        <AlertCircle className="w-3.5 h-3.5" />
-                        <span className="italic">{parentReturn?.reason || 'No reason provided'}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-bold text-slate-700">{item.quantity} units</td>
-                    <td className="px-6 py-4 text-right font-bold text-red-600">
-                      ₦{(item.price * item.quantity).toLocaleString()}
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredItems?.length === 0 && (
+            <tbody className=\"bg-white divide-y divide-slate-200\">
+              {filteredDamagedItems.length > 0 ? (
+                filteredDamagedItems.map(item => {
+                  const associatedReturn = allReturns?.find(ret => ret.id === item.returnId);
+                  const returnDate = associatedReturn ? format(associatedReturn.returnDate, 'MMM dd, yyyy HH:mm') : 'N/A';
+                  const staffName = allUsers?.find(u => u.id === associatedReturn?.staffId)?.username || 'N/A';
+                  return (
+                    <tr key={item.id}>
+                      <td className=\"px-4 py-2 whitespace-nowrap font-medium\">#{item.returnId}</td>
+                      <td className=\"px-4 py-2 whitespace-nowrap\">{item.productName}</td>
+                      <td className=\"px-4 py-2 whitespace-nowrap\">{item.quantity}</td>
+                      <td className=\"px-4 py-2 whitespace-nowrap font-bold text-red-600\">₦{item.valueLost?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) || '0.00'}</td>
+                      <td className=\"px-4 py-2 whitespace-nowrap\">{returnDate}</td>
+                      <td className=\"px-4 py-2 whitespace-nowrap\">{staffName}</td>
+                    </tr>
+                  );
+                })
+              ) : (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                    No damaged items found for this search or period.
-                  </td>
+                  <td colSpan={6} className=\"px-4 py-4 text-center text-slate-500\">No damaged items found matching your criteria.</td>
                 </tr>
               )}
             </tbody>
