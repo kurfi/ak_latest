@@ -1,30 +1,40 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
-import { subscribeToSyncStatus, SyncStatus } from '../services/syncService';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { startSyncService, syncData, subscribeToSyncStatus, SyncStatus } from '../services/syncService';
+import { useAuth } from '../auth/AuthContext';
 
 interface SyncContextType {
-  syncStatus: SyncStatus;
+  status: SyncStatus;
+  forceSync: () => Promise<void>;
 }
 
 const SyncContext = createContext<SyncContextType | undefined>(undefined);
 
 export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [status, setStatus] = useState<SyncStatus>('idle');
+  const { currentUser } = useAuth();
 
   useEffect(() => {
-    // Initial check
-    if (!navigator.onLine) setSyncStatus('offline');
+    // Only start sync if a user is logged in
+    if (currentUser) {
+      console.log("User logged in, starting sync service...");
+      startSyncService();
+      
+      const unsubscribe = subscribeToSyncStatus((newStatus) => {
+        setStatus(newStatus);
+      });
 
-    const unsubscribe = subscribeToSyncStatus((status) => {
-      setSyncStatus(status);
-    });
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [currentUser]);
 
-    return () => {
-      unsubscribe();
-    };
-  }, []);
+  const forceSync = async () => {
+    await syncData();
+  };
 
   return (
-    <SyncContext.Provider value={{ syncStatus }}>
+    <SyncContext.Provider value={{ status, forceSync }}>
       {children}
     </SyncContext.Provider>
   );

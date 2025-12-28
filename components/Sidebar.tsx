@@ -1,100 +1,105 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Package, Users, Receipt, PieChart, Settings, LogOut, RotateCcw, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+import { NavLink, useNavigate } from 'react-router-dom';
+import { 
+  LayoutDashboard, 
+  ShoppingCart, 
+  Package, 
+  Users, 
+  Wallet, 
+  BarChart3, 
+  Settings, 
+  LogOut,
+  RotateCcw,
+  ShieldAlert,
+  HelpCircle,
+  Menu,
+  ChevronLeft
+} from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { UserRole } from '../types';
-import { useSync } from '../contexts/SyncContext';
 
-const Sidebar: React.FC = () => {
-  const location = useLocation();
+export const Sidebar: React.FC = () => {
   const { currentUser, logout } = useAuth();
-  const { syncStatus } = useSync();
+  const navigate = useNavigate();
 
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: [UserRole.ADMIN, UserRole.CASHIER] },
-    { name: 'POS', path: '/pos', icon: ShoppingCart, roles: [UserRole.ADMIN, UserRole.CASHIER] },
-    { name: 'Inventory', path: '/inventory', icon: Package, roles: [UserRole.ADMIN] },
-    { name: 'Customers', path: '/customers', icon: Users, roles: [UserRole.ADMIN, UserRole.CASHIER] },
-    { name: 'Expenses', path: '/expenses', icon: Receipt, roles: [UserRole.ADMIN] },
-    { name: 'Reports', path: '/reports', icon: PieChart, roles: [UserRole.ADMIN] },
-    { name: 'Returns', path: '/returns', icon: RotateCcw, roles: [UserRole.ADMIN] }, // New Returns Nav Item
-    { name: 'Settings', path: '/settings', icon: Settings, roles: [UserRole.ADMIN] },
+  const handleLogout = async () => {
+    if (window.confirm("Are you sure you want to logout?")) {
+      await logout();
+      navigate('/login');
+    }
+  };
+
+  const menuItems = [
+    { icon: LayoutDashboard, label: 'Dashboard', path: '/', roles: [UserRole.ADMIN, UserRole.CASHIER] },
+    { icon: ShoppingCart, label: 'Point of Sale', path: '/pos', roles: [UserRole.ADMIN, UserRole.CASHIER] },
+    { icon: RotateCcw, label: 'Returns', path: '/returns', roles: [UserRole.ADMIN, UserRole.CASHIER] },
+    { icon: Package, label: 'Inventory', path: '/inventory', roles: [UserRole.ADMIN] },
+    { icon: Users, label: 'Customers', path: '/customers', roles: [UserRole.ADMIN, UserRole.CASHIER] },
+    { icon: Wallet, label: 'Expenses', path: '/expenses', roles: [UserRole.ADMIN] },
+    { icon: BarChart3, label: 'Reports', path: '/reports', roles: [UserRole.ADMIN] },
+    { icon: Settings, label: 'Settings', path: '/settings', roles: [UserRole.ADMIN, UserRole.CASHIER] },
   ];
 
-  const availableNavItems = navItems.filter(item => currentUser && item.roles.includes(currentUser.role));
-
-  const getSyncIcon = () => {
-    switch (syncStatus) {
-      case 'syncing': return <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />;
-      case 'offline': 
-      case 'error': return <CloudOff className="w-4 h-4 text-red-400" />;
-      default: return <Cloud className="w-4 h-4 text-emerald-400" />;
-    }
-  };
-
-  const getSyncText = () => {
-    switch (syncStatus) {
-      case 'syncing': return 'Syncing...';
-      case 'offline': return 'Offline';
-      case 'error': return 'Sync Error';
-      default: return 'Online';
-    }
-  };
-
   return (
-    <aside className="w-64 bg-slate-900 text-slate-100 flex flex-col h-screen fixed left-0 top-0 z-10 transition-transform transform md:translate-x-0 -translate-x-full md:relative shadow-xl">
-      <div className="p-6 border-b border-slate-800 flex items-center gap-3">
-        <div className="bg-emerald-500 p-2 rounded-lg">
-          <ShoppingCart className="w-6 h-6 text-white" />
-        </div>
-        <div>
-          <h1 className="text-lg font-bold tracking-tight">AK Alheri Chemist</h1>
-          <p className="text-xs text-slate-400">Kurfi</p>
+    <div className="w-64 bg-slate-900 text-slate-400 h-screen fixed left-0 top-0 flex flex-col z-40 border-r border-slate-800">
+      {/* Brand Header */}
+      <div className="p-6 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 rotate-3">
+            <ShoppingCart className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h1 className="text-lg font-black text-white tracking-tight leading-none">AK ALHERI</h1>
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">Pharmacy Point</p>
+          </div>
         </div>
       </div>
-      
-      <nav className="flex-1 overflow-y-auto py-6 px-3 space-y-1">
-        {availableNavItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = location.pathname === item.path;
+
+      {/* Navigation */}
+      <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+        {menuItems.map((item) => {
+          if (item.roles && !item.roles.includes(currentUser?.role as UserRole)) return null;
+          
           return (
-            <Link
+            <NavLink
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${
-                isActive 
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20' 
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
-              }`}
+              className={({ isActive }) => `
+                flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group
+                ${isActive 
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+                  : 'hover:bg-slate-800 hover:text-slate-200'}
+              `}
             >
-              <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-emerald-400'}`} />
-              <span className="font-medium">{item.name}</span>
-            </Link>
+              <item.icon className="w-5 h-5" />
+              <span className="font-bold text-sm tracking-tight">{item.label}</span>
+            </NavLink>
           );
         })}
       </nav>
 
-      <div className="p-4 border-t border-slate-800 space-y-3">
-        {/* Sync Indicator */}
-        <div className="flex items-center gap-2 px-2 text-xs text-slate-400">
-          {getSyncIcon()}
-          <span>{getSyncText()}</span>
+      {/* User & Logout */}
+      <div className="p-4 mt-auto">
+        <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-800 mb-2">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold text-xs">
+              {currentUser?.username[0].toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-white truncate">{currentUser?.username}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{currentUser?.role}</p>
+            </div>
+          </div>
         </div>
 
-        <div className="px-4 py-3 bg-slate-800 rounded-lg">
-            <p className="text-sm font-bold text-white truncate">{currentUser?.username}</p>
-            <p className="text-xs text-emerald-400 uppercase tracking-wider">{currentUser?.role}</p>
-        </div>
-        <button 
-          onClick={logout}
-          className="flex items-center gap-3 px-4 py-3 w-full rounded-lg text-slate-400 hover:bg-red-900/20 hover:text-red-400 transition-colors"
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-500/10 hover:text-red-400 transition-colors group"
         >
-          <LogOut className="w-5 h-5" />
-          <span className="font-medium">Logout</span>
+          <LogOut className="w-5 h-5 text-slate-500 group-hover:text-red-400" />
+          <span className="font-bold text-sm">Logout</span>
         </button>
       </div>
-    </aside>
+    </div>
   );
 };
-
-export default Sidebar;

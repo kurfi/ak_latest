@@ -1,26 +1,36 @@
 import React from 'react';
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { SplashScreen } from '../components/SplashScreen';
 import { UserRole } from '../types';
 
 interface ProtectedRouteProps {
-  allowedRoles?: UserRole[];
+  children: React.ReactNode;
+  requiredRole?: UserRole;
 }
 
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles }) => {
-  const { currentUser } = useAuth();
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ 
+  children, 
+  requiredRole 
+}) => {
+  const { currentUser, loading } = useAuth();
+  const location = useLocation();
 
-  if (!currentUser) {
-    // User not logged in, redirect to login page
-    return <Navigate to="/login" replace />;
+  if (loading) {
+    return <SplashScreen />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(currentUser.role)) {
-    // User does not have the required role, redirect to dashboard (or an unauthorized page)
+  if (!currentUser) {
+    // Redirect to login but save the current location to redirect back after login
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // Check for role requirement if specified
+  if (requiredRole && currentUser.role !== UserRole.ADMIN && currentUser.role !== requiredRole) {
+    // If the user doesn't have the required role, redirect to dashboard or a "not authorized" page
+    // For now, we'll just send them back to the dashboard
     return <Navigate to="/" replace />;
   }
 
-  return <Outlet />;
+  return <>{children}</>;
 };
-
-export default ProtectedRoute;
