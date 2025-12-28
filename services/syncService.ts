@@ -122,11 +122,24 @@ export const hardResetAndSync = async () => {
 };
 
 let isSyncing = false;
+let lastSyncAttempt = 0;
+const SYNC_TIMEOUT = 120000; // 2 minutes timeout for sync lock
+
+export const resetSyncLock = () => {
+  console.log("Sync: Manually resetting sync lock...");
+  isSyncing = false;
+};
 
 export const syncData = async () => {
+  const now = Date.now();
   if (isSyncing) {
-    console.log("Sync already in progress. Skipping.");
-    return;
+    if (now - lastSyncAttempt > SYNC_TIMEOUT) {
+      console.warn("Sync: Sync process timed out. Resetting lock.");
+      isSyncing = false;
+    } else {
+      console.log("Sync already in progress. Skipping.");
+      return;
+    }
   }
 
   if (!navigator.onLine) {
@@ -136,16 +149,17 @@ export const syncData = async () => {
   }
 
   console.log("Sync: Process started...");
-
+  lastSyncAttempt = Date.now();
   isSyncing = true;
   notifyListeners('syncing');
 
   try {
     await pushChangesToSupabase();
     await pullChangesFromSupabase();
+    console.log("Sync: Process completed successfully.");
     notifyListeners('idle');
   } catch (error) {
-    console.error("Error during sync:", error);
+    console.error("Sync: Error during sync:", error);
     notifyListeners('error');
   } finally {
     isSyncing = false;
@@ -155,17 +169,26 @@ export const syncData = async () => {
 const pushChangesToSupabase = async () => {
   const BATCH_SIZE = 50;
 
+  const totalPending = await db.syncQueue
+    .where('status').anyOf('pending', 'failed')
+    .count();
+
   let pendingChanges = await db.syncQueue
     .where('status').anyOf('pending', 'failed')
     .limit(BATCH_SIZE)
     .toArray();
 
-  if (pendingChanges.length === 0) return;
+  if (pendingChanges.length === 0) {
+    console.log("Sync: No pending changes to push.");
+    return;
+  }
 
-  console.log(`Pushing batch of ${pendingChanges.length} pending changes...`);
+  console.log(`Sync: Pushing batch of ${pendingChanges.length} (Total pending: ${totalPending})...`);
 
   for (const change of pendingChanges) {
     const supabaseTableName = supabaseTableMap[change.table_name];
+    console.log(`Sync: Attempting to push ${change.action} for ${change.table_name}...`);
+    
     if (!supabaseTableName) {
       console.warn(`No Supabase table mapping found for Dexie table: ${change.table_name}`);
       await db.syncQueue.update(change.id!, { status: 'completed' });
@@ -237,7 +260,7 @@ const pushChangesToSupabase = async () => {
           const { error: insertError } = await supabase.from(supabaseTableName).upsert({
             ...snakeCreatePayload,
             id: change.supabase_id,
-            updated_at: new Date().toISOString()
+            updated_at: createPayload.updated_at || new Date().toISOString()
           }, { onConflict: 'id' });
           if (insertError) throw insertError;
           break;
@@ -262,7 +285,7 @@ const pushChangesToSupabase = async () => {
 
           const { error: updateError } = await supabase.from(supabaseTableName).update({
             ...snakeUpdatePayload,
-            updated_at: new Date().toISOString()
+            updated_at: updatePayload.updated_at || new Date().toISOString()
           }).eq('id', change.supabase_id);
 
           if (updateError) throw updateError;
@@ -279,8 +302,12 @@ const pushChangesToSupabase = async () => {
       }
       await db.syncQueue.update(change.id!, { status: 'completed' });
     } catch (error: any) {
-      console.error(`Failed to push change for table ${change.table_name} (${change.action}):`, error);
-      await db.syncQueue.update(change.id!, { status: 'failed', error: error.message });
+      const errorMsg = error.message || 'Unknown error';
+      console.error(`Sync Error: [${change.table_name}] ${change.action} failed:`, errorMsg, error);
+      await db.syncQueue.update(change.id!, { 
+        status: 'failed', 
+        error: `${errorMsg}${error.details ? ' - ' + error.details : ''}` 
+      });
     }
   }
 };

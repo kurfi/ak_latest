@@ -37,10 +37,10 @@ class AKAlheriChemistDB extends Dexie {
 
 
   constructor() {
-    super('AK_Alheri_Chemist_DB_v3'); // Renamed to v3 for fresh start to fix syncQueue issue
+    super('AK_Alheri_Chemist_DB_v4'); // Incremented to v4 for fresh start
 
     // Consolidate all schema into version 1 for the new DB
-    this.version(5).stores({
+    this.version(1).stores({
       customers: '++id, supabase_id, name, phone, email, currentDebt, updated_at',
       products: '++id, supabase_id, name, barcode, category, price, minStockLevel, updated_at',
       batches: '++id, supabase_id, productId, batchNumber, expiryDate, updated_at',
@@ -52,38 +52,25 @@ class AKAlheriChemistDB extends Dexie {
       returns: '++id, supabase_id, saleId, customerId, staffId, returnDate, reason, paymentMethod, updated_at',
       returnedItems: '++id, supabase_id, returnId, productId, restockStatus, updated_at', // New returnedItems table
       auditLogs: '++id, supabase_id, action, user, timestamp, updated_at', // New auditLogs table
-      syncQueue: '++id, table_name, local_id, supabase_id, action, status, timestamp' // New Sync Queue table
+      syncQueue: '++id, table_name, local_id, supabase_id, action, status, timestamp, [table_name+local_id]' // Added composite index
     });
-
-    // NOTE: Default population removed to ensure fresh start from Supabase.
-    // The app will now rely on 'pullChangesFromSupabase' to populate initial data.
-    /*
-    this.on('populate', async () => {
-        // Add default admin user if not exists
-        await db.users.add({
-          username: 'admin',
-          password: 'password', // WARNING: Storing plain text password for demo/dev. In production, hash this!
-          role: UserRole.ADMIN
-        });
-
-        // Add a default walk-in customer
-        await db.customers.add({
-            name: 'Walk-in Customer',
-            phone: 'N/A',
-            email: 'N/A',
-            creditLimit: 0,
-            currentDebt: 0
-        });
-    });
-    */
 
     // --- Dexie Hooks for Sync Queue ---
-    const syncableTables = [
-      this.customers, this.products, this.batches, this.sales, this.expenses,
-      this.customerPayments, this.users, this.returns, this.returnedItems, this.auditLogs
+    const dbInstance = this;
+    const syncableTableNames = [
+      'customers', 'products', 'batches', 'sales', 'expenses',
+      'customerPayments', 'users', 'returns', 'returnedItems', 'auditLogs'
     ];
 
-    syncableTables.forEach(table => {
+    syncableTableNames.forEach(tableName => {
+      const table = this.table(tableName);
+      if (!table) {
+        console.error(`Sync Error: Table "${tableName}" not found during hook registration.`);
+        return;
+      }
+
+      console.log(`Sync: Attaching hooks to table "${tableName}"`);
+
       // Hook for 'creating' operations
       table.hook('creating', function (primKey, obj, transaction) {
         if (!obj.supabase_id) {
@@ -93,8 +80,10 @@ class AKAlheriChemistDB extends Dexie {
 
         // Use onsuccess to capture the auto-incremented primary key
         this.onsuccess = function (primKey) {
+          console.log(`Hook: [${tableName}] created locally (ID: ${primKey}, SupabaseID: ${obj.supabase_id})`);
+          
           const syncEntry: SyncEntry = {
-            table_name: table.name,
+            table_name: tableName,
             local_id: primKey as number,
             supabase_id: obj.supabase_id,
             action: 'create' as const,
@@ -103,8 +92,17 @@ class AKAlheriChemistDB extends Dexie {
             status: 'pending'
           };
 
-          // Add to syncQueue using db instance (new transaction) to ensure it runs regardless of current transaction scope
-          db.syncQueue.add(syncEntry).catch(e => console.error("Error adding create to syncQueue (db):", e));
+          // Use setTimeout and ignoreTransaction to ensure this runs outside the current transaction scope
+          setTimeout(() => {
+            Dexie.ignoreTransaction(async () => {
+              try {
+                await dbInstance.syncQueue.add(syncEntry);
+                console.log(`Hook: [${tableName}] sync entry successfully added to queue.`);
+              } catch (e) {
+                console.error(`Sync Queue Error: [${tableName}] failed to add CREATE entry:`, e);
+              }
+            });
+          }, 0);
         };
       });
 
@@ -115,7 +113,7 @@ class AKAlheriChemistDB extends Dexie {
         }
 
         const syncEntry: SyncEntry = {
-          table_name: table.name,
+          table_name: tableName,
           local_id: primKey as number,
           supabase_id: obj.supabase_id,
           action: 'update' as const,
@@ -124,19 +122,23 @@ class AKAlheriChemistDB extends Dexie {
           status: 'pending'
         };
 
-        try {
-          transaction.table('syncQueue').add(syncEntry).catch(() => {
-            db.syncQueue.add(syncEntry).catch(e => console.error("Error adding update to syncQueue (db):", e));
+        // Use setTimeout and ignoreTransaction
+        setTimeout(() => {
+          Dexie.ignoreTransaction(async () => {
+            try {
+              await dbInstance.syncQueue.add(syncEntry);
+              console.log(`Hook: [${tableName}] update sync entry added to queue.`);
+            } catch (e) {
+              console.error(`Sync Queue Error: [${tableName}] failed to add UPDATE entry:`, e);
+            }
           });
-        } catch (e) {
-          db.syncQueue.add(syncEntry).catch(e => console.error("Error adding update to syncQueue (db):", e));
-        }
+        }, 0);
       });
 
       // Hook for 'deleting' operations
       table.hook('deleting', function (primKey, obj, transaction) {
         const syncEntry: SyncEntry = {
-          table_name: table.name,
+          table_name: tableName,
           local_id: primKey as number,
           supabase_id: obj.supabase_id,
           action: 'delete' as const,
@@ -145,13 +147,17 @@ class AKAlheriChemistDB extends Dexie {
           status: 'pending'
         };
 
-        try {
-          transaction.table('syncQueue').add(syncEntry).catch(() => {
-            db.syncQueue.add(syncEntry).catch(e => console.error("Error adding delete to syncQueue (db):", e));
+        // Use setTimeout and ignoreTransaction
+        setTimeout(() => {
+          Dexie.ignoreTransaction(async () => {
+            try {
+              await dbInstance.syncQueue.add(syncEntry);
+              console.log(`Hook: [${tableName}] delete sync entry added to queue.`);
+            } catch (e) {
+              console.error(`Sync Queue Error: [${tableName}] failed to add DELETE entry:`, e);
+            }
           });
-        } catch (e) {
-          db.syncQueue.add(syncEntry).catch(e => console.error("Error adding delete to syncQueue (db):", e));
-        }
+        }, 0);
       });
     });
   }
