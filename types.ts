@@ -102,4 +102,81 @@ export interface Setting {
   value: any;
 }
 
-// --- Added for Authentication ---\nexport enum UserRole {\n  ADMIN = 'ADMIN',\n  CASHIER = 'CASHIER'\n}\n\nexport interface User {\n  id?: number;\n  supabase_id?: string;\n  username: string;\n  password?: string; // In a real app, this should be a hash, and ideally not part of the sync for security\n  role: UserRole;\n  updated_at?: string;\n}\n\n// --- New Enums for Returns ---\nexport enum ReturnReason {\n  DEFECTIVE = 'Defective Item',\n  WRONG_ITEM = 'Wrong Item Shipped',\n  CUSTOMER_CHANGED_MIND = 'Customer Changed Mind',\n  SIZE_ISSUE = 'Size Issue',\n  DAMAGED_IN_TRANSIT = 'Damaged in Transit',\n  OTHER = 'Other'\n}\n\n// --- New Interfaces for Returns ---\nexport interface Return {\n  id?: number;\n  supabase_id?: string;\n  saleId: number; // Reference to the original sale (will need to map to supabase_id)\n  customerId?: number; // Optional reference to the customer (will need to map to supabase_id)\n  customerName?: string; // Denormalized for easier display\n  staffId?: number; // New: Staff who processed the return (will need to map to user's supabase_id)\n  returnDate: Date;\n  totalRefundAmount: number;\n  reason: ReturnReason; // Changed to use ReturnReason enum\n  paymentMethod: PaymentMethod; // How the refund was issued (CASH, STORE_CREDIT, etc.)\n  notes?: string;\n  updated_at?: string;\n}\n\nexport interface ReturnedItem {\n  id?: number;\n  supabase_id?: string;\n  returnId: number; // Reference to the parent return transaction (will need to map to return's supabase_id)\n  productId: number; // (will need to map to product's supabase_id)\n  productName: string;\n  quantity: number;\n  price: number; // Price at time of return (per unit)\n  refundAmount: number; // Calculated refund for this item (quantity * price)\n  restockStatus: 'restocked' | 'damaged'; // Changed: Removed 'not_applicable', now explicitly restocked or damaged\n  valueLost?: number; // New: Value lost for damaged items\n  batchId?: number; // Optional: if a specific batch was returned from (will need to map to batch's supabase_id)\n  updated_at?: string;\n}\n\nexport interface AuditLog {\n  id?: number;\n  supabase_id?: string;\n  action: string;\n  details: string;\n  user: string; // This will likely map to the user's supabase_id or email\n  timestamp: Date;\n  updated_at?: string;\n}\n\n// --- New Interface for Synchronization Queue ---\nexport interface SyncEntry {\n  id?: number;\n  table_name: string;\n  local_id: number;\n  supabase_id?: string; // Supabase UUID if available\n  action: 'create' | 'update' | 'delete';\n  payload?: any; // The data to sync, or a partial update\n  timestamp: Date;\n  status: 'pending' | 'in_progress' | 'completed' | 'failed';\n  error?: string;\n}\n
+// --- Added for Authentication ---
+export enum UserRole {
+  ADMIN = 'ADMIN',
+  CASHIER = 'CASHIER'
+}
+
+export interface User {
+  id?: number;
+  supabase_id?: string;
+  username: string;
+  password?: string; // In a real app, this should be a hash, and ideally not part of the sync for security
+  role: UserRole;
+  updated_at?: string;
+}
+
+// --- New Enums for Returns ---
+export enum ReturnReason {
+  DEFECTIVE = 'Defective Item',
+  WRONG_ITEM = 'Wrong Item Shipped',
+  CUSTOMER_CHANGED_MIND = 'Customer Changed Mind',
+  SIZE_ISSUE = 'Size Issue',
+  DAMAGED_IN_TRANSIT = 'Damaged in Transit',
+  OTHER = 'Other'
+}
+
+// --- New Interfaces for Returns ---
+export interface Return {
+  id?: number;
+  supabase_id?: string;
+  saleId: number; // Reference to the original sale (will need to map to supabase_id)
+  customerId?: number; // Optional reference to the customer (will need to map to supabase_id)
+  customerName?: string; // Denormalized for easier display
+  staffId?: number; // New: Staff who processed the return (will need to map to user's supabase_id)
+  returnDate: Date;
+  totalRefundAmount: number;
+  reason: ReturnReason; // Changed to use ReturnReason enum
+  paymentMethod: PaymentMethod; // How the refund was issued (CASH, STORE_CREDIT, etc.)
+  notes?: string;
+  updated_at?: string;
+}
+
+export interface ReturnedItem {
+  id?: number;
+  supabase_id?: string;
+  returnId: number; // Reference to the parent return transaction (will need to map to return's supabase_id)
+  productId: number; // (will need to map to product's supabase_id)
+  productName: string;
+  quantity: number;
+  price: number; // Price at time of return (per unit)
+  refundAmount: number; // Calculated refund for this item (quantity * price)
+  restockStatus: 'restocked' | 'damaged'; // Changed: Removed 'not_applicable', now explicitly restocked or damaged
+  valueLost?: number; // New: Value lost for damaged items
+  batchId?: number; // Optional: if a specific batch was returned from (will need to map to batch's supabase_id)
+  updated_at?: string;
+}
+
+export interface AuditLog {
+  id?: number;
+  supabase_id?: string;
+  action: string;
+  details: string;
+  user: string; // This will likely map to the user's supabase_id or email
+  timestamp: Date;
+  updated_at?: string;
+}
+
+// --- New Interface for Synchronization Queue ---
+export interface SyncEntry {
+  id?: number;
+  table_name: string;
+  local_id: number;
+  supabase_id?: string; // Supabase UUID if available
+  action: 'create' | 'update' | 'delete';
+  payload?: any; // The data to sync, or a partial update
+  timestamp: Date;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  error?: string;
+}
