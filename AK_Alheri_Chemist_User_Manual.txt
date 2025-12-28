@@ -1,0 +1,32 @@
+/**
+ * AK ALHERI CHEMIST - USER MANUAL
+ * Version: 2.1.0 (Enterprise)
+ * 
+ * 1. GETTING STARTED
+ *    - Open the application and login using your assigned email and password.
+ *    - Ensure you have an active internet connection for the first login of a session.
+ * 
+ * 2. POINT OF SALE (POS)
+ *    - Search for products by name or barcode.
+ *    - Add items to the cart.
+ *    - Select a customer (default is Walk-in).
+ *    - Enter discount if applicable.
+ *    - Select payment method and enter amount.
+ *    - Complete sale to generate receipt.
+ * 
+ * 3. INVENTORY MANAGEMENT
+ *    - Use the Inventory tab to add new products.
+ *    - Record "New Batch" every time you receive stock.
+ *    - Monitor Low Stock and Expiry alerts on the dashboard.
+ * 
+ * 4. RETURNS & REFUNDS
+ *    - Use the Returns tab and enter the Invoice Number from the customer's receipt.
+ *    - Select items to return and specify if they should be restocked.
+ *    - Provide a reason and complete the refund.
+ * 
+ * 5. TROUBLESHOOTING
+ *    - If data seems out of sync, go to Settings -> Troubleshooting -> Hard Reset & Sync.
+ *    - Check the printer target in settings if receipts are not printing.
+ * 
+ * Support: Call 09060605362 for technical assistance.
+ */
