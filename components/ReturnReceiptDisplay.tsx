@@ -1,67 +1,137 @@
 import React from 'react';
+import { Sale, SaleItem, PaymentMethod, Customer, ReturnReason, Return, ReturnedItem } from '../types';
 import { format } from 'date-fns';
-import { CheckCircle2, Package, RotateCcw, Printer, ArrowRight } from 'lucide-react';
 
+// Props for the ReturnReceiptDisplay component
 interface ReturnReceiptDisplayProps {
-  returnData: any;
-  onDone: () => void;
+  originalSale: Sale;
+  returnItems: (SaleItem & { returnedQuantity: number; restockStatus: 'restocked' | 'damaged'; reason: ReturnReason | string })[];
+  totalRefundAmount: number;
+  returnReason: ReturnReason | string;
+  refundMethod: PaymentMethod;
+  customer: Customer | null;
+  cashierUsername: string;
+  returnDate: Date;
+  returnId: number | null; // Pass the newly created return ID
+  paperSize?: '80mm' | '58mm'; // Optional: for receipt formatting
 }
 
-export const ReturnReceiptDisplay: React.FC<ReturnReceiptDisplayProps> = ({ returnData, onDone }) => {
-  return (
-    <div className="bg-white rounded-2xl p-6 shadow-2xl border border-slate-100">
-      <div className="text-center mb-6">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <CheckCircle2 className="w-8 h-8 text-green-600" />
-        </div>
-        <h2 className="text-2xl font-black text-slate-900">Return Processed</h2>
-        <p className="text-slate-500 text-sm">Return ID: #{returnData.id}</p>
-      </div>
+// This component will render the detailed return receipt
+const ReturnReceiptDisplay = React.forwardRef<HTMLDivElement, ReturnReceiptDisplayProps>(
+  (
+    {
+      originalSale,
+      returnItems,
+      totalRefundAmount,
+      returnReason,
+      refundMethod,
+      customer,
+      cashierUsername,
+      returnDate,
+      returnId,
+      paperSize = '80mm',
+    },
+    ref
+  ) => {
+    const itemsToDisplay = returnItems.filter((item) => item.returnedQuantity > 0);
 
-      <div className="bg-slate-50 rounded-xl p-4 mb-6 space-y-4 font-mono text-xs">
-        <div className="flex justify-between border-b border-slate-200 pb-2">
-          <span className="text-slate-500 uppercase">Original Invoice</span>
-          <span className="font-bold text-slate-800">#{returnData.saleInvoice}</span>
+    return (
+      <div 
+        id="return-receipt-content"
+        ref={ref} 
+        className={`bg-white p-4 md:p-6 border border-slate-200 text-xs md:text-sm font-mono text-slate-800 leading-tight max-h-full overflow-y-auto ${paperSize === '80mm' ? 'receipt-80mm' : 'receipt-58mm'}`}
+        style={{ minHeight: '400px' }} // Ensure visibility for image/pdf generation
+      >
+        <div className="text-center mb-4">
+          <h2 className="text-base md:text-lg font-bold mb-1">AK Alheri Chemist PPMVS Kurfi</h2>
+          <p className="text-[10px] md:text-xs text-slate-500">No.2&3 Maraɗi Aliyu Street Opposite JIBWIS Jumma'a Masjid Kurfi</p>
+          <p className="text-[10px] md:text-xs text-slate-500">Tel: 09060605362, 07039177740</p>
+          <p className="text-[10px] md:text-xs text-slate-500">Email: kabirbalakurfi@gmail.com</p>
         </div>
-        <div className="flex justify-between border-b border-slate-200 pb-2">
-          <span className="text-slate-500 uppercase">Date</span>
-          <span className="font-bold text-slate-800">{format(returnData.returnDate, 'dd/MM/yyyy HH:mm')}</span>
+
+        <div className="border-b border-dashed border-slate-300 pb-2 mb-2 space-y-1">
+          <div className="flex justify-between">
+            <span>Return ID:</span>
+            <span>#{returnId || 'N/A'}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Date:</span>
+            <span>{format(returnDate, 'dd/MM/yyyy HH:mm')}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Customer:</span>
+            <span>{customer?.name || originalSale.customerName || 'Walk-in Customer'}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Cashier:</span>
+            <span>{cashierUsername}</span>
+          </div>
         </div>
-        
-        <div className="space-y-2">
-          <p className="text-slate-400 uppercase text-[10px] font-bold">Items Returned</p>
-          {returnData.items.map((item: any, idx: number) => (
-            <div key={idx} className="flex justify-between items-start">
-              <span className="flex-1 pr-4">{item.productName} x{item.returnQty}</span>
-              <span className="font-bold">₦{(item.price * item.returnQty).toLocaleString()}</span>
+
+        <div className="mb-2">
+          <p className="font-medium text-slate-700 mb-1 text-[10px] md:text-xs uppercase tracking-wide">Original Sale Details:</p>
+          <div className="border-b border-dashed border-slate-300 pb-2 mb-2 space-y-1 text-[10px] md:text-xs">
+            <div className="flex justify-between">
+              <span>Sale ID:</span>
+              <span>#{originalSale.id}</span>
             </div>
-          ))}
+            <div className="flex justify-between">
+              <span>Date:</span>
+              <span>{format(originalSale.date, 'dd/MM/yyyy HH:mm')}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Amount:</span>
+              <span>₦{originalSale.finalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+          </div>
         </div>
 
-        <div className="pt-2 border-t-2 border-slate-200 flex justify-between items-center text-sm">
-          <span className="font-bold text-slate-900 uppercase">Total Refund</span>
-          <span className="text-lg font-black text-indigo-600">₦{returnData.totalRefundAmount.toLocaleString()}</span>
+        <div className="mb-2">
+          <p className="font-medium text-slate-700 mb-1 text-[10px] md:text-xs uppercase tracking-wide">Returned Items:</p>
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-slate-300">
+                <th className="pb-1">Item</th>
+                <th className="pb-1 text-right border-r border-dashed border-slate-300 pr-2">Qty</th>
+                <th className="pb-1 text-right border-r border-dashed border-slate-300 pr-2">Price</th>
+                <th className="pb-1 text-right">Refund</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itemsToDisplay.map((item, i) => (
+                <tr key={i}>
+                  <td className="pt-1 pr-1">{item.productName} ({item.restockStatus})</td>
+                  <td className="pt-1 text-right border-r border-dashed border-slate-300 pr-2">{item.returnedQuantity}</td>
+                  <td className="pt-1 text-right border-r border-dashed border-slate-300 pr-2">₦{item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td className="pt-1 text-right">₦{(item.returnedQuantity * item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
-        <div className="pt-2 text-center">
-          <p className="text-[10px] text-slate-400 font-bold uppercase">Refund via {returnData.paymentMethod}</p>
+        <div className="border-t border-dashed border-slate-300 pt-2 space-y-1 mb-4">
+          <div className="flex justify-between text-[10px] md:text-xs">
+            <span>Return Reason:</span>
+            <span>{returnReason}</span>
+          </div>
+          <div className="flex justify-between text-[10px] md:text-xs">
+            <span>Refund Method:</span>
+            <span>{refundMethod}</span>
+          </div>
+          <div className="flex justify-between font-bold text-base md:text-lg mt-2">
+            <span>TOTAL REFUND</span>
+            <span>₦{totalRefundAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </div>
+        </div>
+
+        <div className="text-center text-[10px] md:text-xs text-slate-500 mt-6">
+          <p>Mun gode da kasuwancin ku!</p>
+          <p>Thank you for your business!</p>
         </div>
       </div>
+    );
+  }
+);
 
-      <div className="flex flex-col gap-3">
-        <button 
-          onClick={() => window.print()}
-          className="w-full py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors"
-        >
-          <Printer className="w-5 h-5" /> Print Return Slip
-        </button>
-        <button 
-          onClick={onDone}
-          className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
-        >
-          Continue <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-    </div>
-  );
-};
+export default ReturnReceiptDisplay;

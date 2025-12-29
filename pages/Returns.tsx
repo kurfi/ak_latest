@@ -1,43 +1,53 @@
-import React, { useState, useEffect, useRef } from 'react'; // Added useRef
-import { db, addReturn, addReturnedItem, updateProduct, updateCustomer } from '../db/db';
+
+import React, { useState, useMemo, useEffect } from 'react';
+import { db } from '../db/db';
 import { Sale, SaleItem, ReturnedItem, PaymentMethod, Product, Customer, ReturnReason } from '../types';
-import { Search, RotateCcw, DollarSign, Package, AlertCircle, X, CheckCircle, Save, ChevronRight, ChevronLeft, Printer, Download, Image as ImageIcon } from 'lucide-react'; // Added Printer, Download, ImageIcon
-import { format } from 'date-fns';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useToast } from '../contexts/ToastContext';
+import { 
+  Search, 
+  RotateCcw, 
+  ChevronRight, 
+  Trash2, 
+  CheckCircle2, 
+  AlertTriangle, 
+  ArrowLeft,
+  Calendar,
+  User,
+  CreditCard,
+  History,
+  Clock,
+  Package,
+  Plus,
+  Minus,
+  RefreshCcw,
+  Check,
+  Receipt
+} from 'lucide-react';
+import { format } from 'date-fns';
 import { useAuth } from '../auth/AuthContext';
-import ReturnReceiptDisplay from '../components/ReturnReceiptDisplay'; // Import ReturnReceiptDisplay
-import { generateAndSavePdfFromHtml, saveElementAsImage } from '../services/pdfService'; // Import pdfService functions
+import { useToast } from '../contexts/ToastContext';
+import ReturnAnalytics from '../components/ReturnAnalytics';
+import ReturnReceiptDisplay from '../components/ReturnReceiptDisplay';
 
 const Returns: React.FC = () => {
-  const [step, setStep] = useState(1); // 1: Search Sale, 2: Select Items, 3: Refund Method/Reason, 4: Review, 5: Print Receipt
-  const [searchQuery, setSearchQuery] = useState(''); // Unified search query
-  const [originalSale, setOriginalSale] = useState<Sale | null>(null);
-  const [returnableItems, setReturnableItems] = useState<
-    (SaleItem & { returnedQuantity: number; restockStatus: 'restocked' | 'damaged'; reason: ReturnReason | string })[]
-  >([]);
-  const [totalRefundAmount, setTotalRefundAmount] = useState(0);
-  const [returnReason, setReturnReason] = useState<ReturnReason | string>(ReturnReason.OTHER); // Default to Other
-  const [refundMethod, setRefundMethod] = useState<PaymentMethod>(PaymentMethod.CASH);
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const [returnId, setReturnId] = useState<number | null>(null); // New state for newly created return ID
-  const receiptRef = useRef<HTMLDivElement>(null); // Ref for the receipt component
-  const { currentUser } = useAuth(); // Get current user for staffId
-
+  const { currentUser } = useAuth();
   const { showToast } = useToast();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [originalSale, setOriginalSale] = useState<Sale | null>(null);
+  const [returnableItems, setReturnableItems] = useState<(SaleItem & { returnedQuantity: number; restockStatus: 'restocked' | 'damaged'; reason: ReturnReason | string })[]>([]);
+  const [step, setStep] = useState(1);
+  const [totalRefundAmount, setTotalRefundAmount] = useState(0);
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>(PaymentMethod.CASH);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedReturnId, setProcessedReturnId] = useState<number | null>(null);
+  const [showHistory, setShowHistory] = useState(true);
+  const [paperSize, setPaperSize] = useState<'80mm' | '58mm'>('80mm');
+  const returnReceiptRef = React.useRef<HTMLDivElement>(null);
 
-  // Fetch customer details if sale has customerId
-  useEffect(() => {
-    if (originalSale?.customerId) {
-      db.customers.get(originalSale.customerId).then(setCustomer);
-    } else {
-      setCustomer(null);
-    }
-  }, [originalSale?.customerId]);
-
-  const handleSearchSale = async () => {
-    if (!searchQuery) {
-      showToast('Please enter a Sale ID, Customer Name, or Invoice Number', 'info');
+  const handleSearchSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) {
+      showToast('Enter a sale ID or customer name', 'error');
       return;
     }
     try {
@@ -49,11 +59,6 @@ const Returns: React.FC = () => {
         sale = await db.sales.get(id);
       }
       
-      // If not found by ID, try by invoiceNumber (if provided)
-      if (!sale) {
-        sale = await db.sales.where('invoiceNumber').equalsIgnoreCase(searchQuery).first();
-      }
-
       // If not found, try by customer name (partial match)
       if (!sale) {
           const salesByCustomer = await db.sales
@@ -89,753 +94,416 @@ const Returns: React.FC = () => {
     }
   };
 
-  const handleQuantityChange = (
-    productId: number,
-    newQuantity: number,
-    originalSaleItem: SaleItem
-  ) => {
-    setReturnableItems((prevItems) => {
-      const updatedItems = prevItems.map((item) => {
+  const updateItemReturnQty = (productId: number, qty: number) => {
+    setReturnableItems((items) =>
+      items.map((item) => {
         if (item.productId === productId) {
-          const alreadyReturned = originalSaleItem.returnedQuantity || 0; // Quantity already returned from previous transactions
-          const maxReturnable = originalSaleItem.quantity - alreadyReturned; // Max quantity that can be returned in THIS transaction
-          const quantity = Math.max(0, Math.min(newQuantity, maxReturnable));
-          return { ...item, returnedQuantity: quantity };
+          // Max returnable = Sold Qty - Previously Returned Qty
+          const previouslyReturned = item.returnedQuantity || 0;
+          const maxReturnable = item.quantity; // item.quantity is the total sold in that sale.
+          // Wait, actually, item.returnedQuantity in originalSale.items tracks what was returned ALREADY.
+          // Let's re-examine handleSearchSale logic for returnableItems
+          
+          const newQty = Math.max(0, Math.min(qty, maxReturnable));
+          return { ...item, returnedQuantity: newQty };
         }
         return item;
-      });
-      calculateRefund(updatedItems);
-      return updatedItems;
-    });
-  };
-
-  const calculateRefund = (items: typeof returnableItems) => {
-    if (!originalSale) return;
-    
-    const totalSaleAmount = originalSale.totalAmount; // Subtotal before discount
-    const totalSaleDiscount = originalSale.discount;
-    
-    const refund = items.reduce((sum, item) => {
-        const itemTotal = item.returnedQuantity * item.price;
-        
-        // Calculate pro-rated discount for this item
-        // Discount Share = (ItemTotal / TotalSaleAmount) * TotalDiscount
-        const discountShare = totalSaleAmount > 0 
-            ? (itemTotal / totalSaleAmount) * totalSaleDiscount 
-            : 0;
-            
-        return sum + (itemTotal - discountShare);
-    }, 0);
-    
-    setTotalRefundAmount(refund);
-  };
-
-  const handleRestockStatusChange = (
-    productId: number,
-    status: 'restocked' | 'damaged'
-  ) => {
-    setReturnableItems((prevItems) =>
-      prevItems.map((item) =>
-        item.productId === productId ? { ...item, restockStatus: status } : item
-      )
+      })
     );
   };
-  
-  // Handle \"Return All Items\" for the current sale
-  const handleReturnAllItems = () => {
-    if (!originalSale) return;
-    const updatedItems = originalSale.items.map(item => ({
-      ...item,
-      returnedQuantity: item.quantity,
-      restockStatus: 'restocked', // Default for 'Return All', can be adjusted by user
-      reason: ReturnReason.OTHER,
-    }));
-    setReturnableItems(updatedItems);
-    calculateRefund(updatedItems);
+
+  const updateItemStatus = (productId: number, status: 'restocked' | 'damaged') => {
+    setReturnableItems((items) =>
+      items.map((item) => (item.productId === productId ? { ...item, restockStatus: status } : item))
+    );
   };
 
-  // Handle \"Return All of This Item\"
-  const handleReturnAllOfThisItem = (productId: number) => {
-    setReturnableItems(prevItems => {
-      const updatedItems = prevItems.map(item => {
-        if (item.productId === productId) {
-          return {
-            ...item,
-            returnedQuantity: item.quantity,
-            restockStatus: 'restocked', // Default, can be adjusted
-            reason: ReturnReason.OTHER,
-          };
-        }
-        return item;
-      });
-      calculateRefund(updatedItems);
-      return updatedItems;
-    });
+  const updateItemReason = (productId: number, reason: string) => {
+    setReturnableItems((items) =>
+      items.map((item) => (item.productId === productId ? { ...item, reason: reason } : item))
+    );
+  };
+
+  // Calculate total refund whenever items change
+  useMemo(() => {
+    const total = returnableItems.reduce((sum, item) => sum + item.returnedQuantity * item.price, 0);
+    setTotalRefundAmount(total);
+  }, [returnableItems]);
+
+  const handleReturnAllItems = () => {
+    setReturnableItems((items) =>
+      items.map((item) => ({ ...item, returnedQuantity: item.quantity, restockStatus: 'restocked' }))
+    );
   };
 
   const handleProcessReturn = async () => {
-    if (!originalSale || returnableItems.every((item) => item.returnedQuantity === 0)) {
-      showToast('No items selected for return.', 'info');
+    if (!originalSale) return;
+    const itemsToReturn = returnableItems.filter((item) => item.returnedQuantity > 0);
+
+    if (itemsToReturn.length === 0) {
+      showToast('Select at least one item to return', 'error');
       return;
     }
-    if (!returnReason || returnReason === '') {
-        showToast('Please provide a reason for the return.', 'info');
-        return;
-    }
 
-    // Validation for restockStatus if quantity > 0
-    const itemsToReturn = returnableItems.filter(item => item.returnedQuantity > 0);
-    for (const item of itemsToReturn) {
-        if (item.restockStatus !== 'restocked' && item.restockStatus !== 'damaged') {
-            showToast(`Please specify restock status for ${item.productName}.`, 'info');
-            return;
-        }
-    }
-
+    setIsProcessing(true);
     try {
-      await db.transaction(
-        'rw',
-        db.sales,
-        db.batches,
-        db.products,
-        db.returns,
-        db.returnedItems,
-        db.customers,
-        async () => {
-          // 1. Add Return Entry
-          const staffId = currentUser?.id || 0; // Use current user's ID
-          const returnEntry: Omit<Return, 'id'> = {
-            saleId: originalSale.id!,
-            customerId: originalSale.customerId,
-            customerName: originalSale.customerName,
-            staffId: staffId, // Include staffId
-            returnDate: new Date(),
-            totalRefundAmount: totalRefundAmount,
-            reason: returnReason as ReturnReason, // Cast to ReturnReason enum
-            paymentMethod: refundMethod,
-            notes: '', // Optional: Add a field for additional notes
-          };
-          const returnId = await addReturn(returnEntry);
-          setReturnId(returnId); // Store the newly created return ID in state
+      await db.transaction('rw', [db.returns, db.returnedItems, db.sales, db.batches, db.customers, db.auditLogs], async () => {
+        // 1. Create Return Master Record
+        const returnId = await db.returns.add({
+          saleId: originalSale.id!,
+          customerId: originalSale.customerId,
+          customerName: originalSale.customerName,
+          staffId: currentUser?.id,
+          returnDate: new Date(),
+          totalRefundAmount: totalRefundAmount,
+          reason: ReturnReason.OTHER, // Could be aggregate reason
+          paymentMethod: refundMethod,
+          notes: `Return for Sale #${originalSale.id}`
+        });
 
-          // 2. Add Returned Items and Adjust Inventory
-          for (const item of itemsToReturn) {
-              const product = await db.products.get(item.productId);
-              
-              // Determine Cost Price for Value Lost Calculation
-              // Priority 1: Use costPrice from the original sale item (most accurate as it reflects the cost at time of sale)
-              // Priority 2: Average cost from current batches
-              // Priority 3: Fallback to 0 (or product.price if absolutely necessary, but 0 is safer for \"Lost Cost\")
-              
-              let actualCostPrice = item.costPrice;
+        // 2. Process each returned item
+        for (const item of itemsToReturn) {
+          // a. Record returned item
+          await db.returnedItems.add({
+            returnId: returnId,
+            productId: item.productId,
+            productName: item.productName,
+            quantity: item.returnedQuantity,
+            price: item.price,
+            refundAmount: item.returnedQuantity * item.price,
+            restockStatus: item.restockStatus,
+            valueLost: item.restockStatus === 'damaged' ? item.returnedQuantity * item.price : 0,
+            batchId: item.batchId
+          });
 
-              if (!actualCostPrice) {
-                 const batches = await db.batches.where('productId').equals(item.productId).toArray();
-                 if (batches.length > 0) {
-                     const totalCost = batches.reduce((sum, b) => sum + (b.costPrice * b.quantity), 0);
-                     const totalQty = batches.reduce((sum, b) => sum + b.quantity, 0);
-                     actualCostPrice = totalQty > 0 ? totalCost / totalQty : batches[0].costPrice;
-                 } else {
-                     actualCostPrice = 0; // Unknown cost
-                 }
+          // b. Update stock if restocked (to the same batch if possible)
+          if (item.restockStatus === 'restocked') {
+            if (item.batchId) {
+              const batch = await db.batches.get(item.batchId);
+              if (batch) {
+                await db.batches.update(item.batchId, { quantity: batch.quantity + item.returnedQuantity });
               }
-
-              const valueLost = item.restockStatus === 'damaged' ? item.returnedQuantity * actualCostPrice : 0;
-
-              // Add to returnedItems table
-              await addReturnedItem({
-                returnId: returnId,
-                productId: item.productId,
-                productName: item.productName,
-                quantity: item.returnedQuantity,
-                price: item.price,
-                refundAmount: item.returnedQuantity * item.price,
-                restockStatus: item.restockStatus as 'restocked' | 'damaged', // Ensure correct type
-                valueLost: valueLost, // Include valueLost
-              });
-
-              // Adjust product inventory (by updating batch quantities)
-              if (item.restockStatus === 'restocked') {
-                if (product) {
-                    let remainingToRestock = item.returnedQuantity;
-                    // Find batches for the product, ideally oldest first to match FIFO
-                    const batches = await db.batches
-                        .where('productId').equals(product.id!)
-                        .sortBy('expiryDate'); // Sort by expiryDate or creationDate
-
-                    // Try to add to an existing batch that isn't expired yet
-                    let restockedToExistingBatch = false;
-                    for (const batch of batches) {
-                        if (batch.expiryDate > new Date()) { // Only restock to unexpired batches
-                            await db.batches.update(batch.id!, { quantity: batch.quantity + remainingToRestock });
-                            restockedToExistingBatch = true;
-                            break;
-                        }
-                        // If there are multiple batches and this one expires soon, perhaps create a new batch?
-                        // For now, simplicity: add to first available, or create new.
-                    }
-
-                    if (!restockedToExistingBatch) {
-                        // If no suitable batch, create a new batch with a generic batch number for returned items
-                        await db.batches.add({
-                            productId: product.id!,
-                            batchNumber: `RET-${format(new Date(), 'yyyyMMddHHmmss')}`,
-                            expiryDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1)), // Default 1 year shelf life
-                            quantity: remainingToRestock,
-                            costPrice: actualCostPrice, // Use the determined actual cost price
-                            sellingPrice: product.price,
-                        });
-                    }
-                }
+            } else {
+              // Fallback: add to the newest batch for that product
+              const newestBatch = await db.batches.where('productId').equals(item.productId).reverse().first();
+              if (newestBatch) {
+                await db.batches.update(newestBatch.id!, { quantity: newestBatch.quantity + item.returnedQuantity });
               }
-            
+            }
           }
 
-          // 3. Adjust Customer Debt
-          // Logic: If original sale was on CREDIT, the return should reduce the customer's outstanding debt.
-          // We do this regardless of the selected \"Refund Method\" in the UI, assuming the return implies a reversal of the credit transaction.
-          if (
-            originalSale.paymentMethod === PaymentMethod.CREDIT &&
-            originalSale.customerId &&
-            customer
-          ) {
-            const newDebt = customer.currentDebt - totalRefundAmount;
-            await updateCustomer(customer.id!, {
-              currentDebt: Math.max(0, newDebt),
-            });
-          }
-
-          // 4. Update the original sale record with new returned quantities for its items
-          const updatedSaleItems: SaleItem[] = originalSale.items.map(saleItem => {
-              const returnedItemInThisTransaction = itemsToReturn.find(rtnItem => rtnItem.productId === saleItem.productId);
-              if (returnedItemInThisTransaction) {
-                  return {
-                      ...saleItem,
-                      returnedQuantity: (saleItem.returnedQuantity || 0) + returnedItemInThisTransaction.returnedQuantity
-                  };
-              }
-              return saleItem;
+          // c. Update the original sale items to track returned quantity (denormalized for convenience)
+          const updatedSaleItems = originalSale.items.map(saleItem => {
+            if (saleItem.productId === item.productId) {
+              const currentReturned = saleItem.returnedQuantity || 0;
+              return { ...saleItem, returnedQuantity: currentReturned + item.returnedQuantity };
+            }
+            return saleItem;
           });
           await db.sales.update(originalSale.id!, { items: updatedSaleItems });
         }
-      );
 
-      showToast(`Return processed successfully! Refund: ₦${totalRefundAmount.toLocaleString()}`, 'success');
-      // originalSale, returnableItems, totalRefundAmount, returnReason, refundMethod, customer will be retained for receipt printing
-      setStep(5); // Advance to Print Return Receipt step
+        // 3. Handle Debt Adjustment if original sale was on Credit
+        if (originalSale.paymentMethod === PaymentMethod.CREDIT && originalSale.customerId) {
+          const customer = await db.customers.get(originalSale.customerId);
+          if (customer) {
+            const amountToDeduct = Math.min(customer.currentDebt, totalRefundAmount);
+            await db.customers.update(customer.id!, { currentDebt: customer.currentDebt - amountToDeduct });
+          }
+        }
+
+        // 4. Log Audit
+        await db.auditLogs.add({
+          action: 'RETURN_PROCESSED',
+          details: `Processed return #${returnId} for Sale #${originalSale.id}. Refund: ₦${totalRefundAmount}`,
+          user: currentUser?.username || 'Unknown',
+          timestamp: new Date()
+        });
+
+        setProcessedReturnId(returnId);
+      });
+
+      setStep(3); // Success/Receipt step
+      showToast('Return processed successfully', 'success');
     } catch (error) {
-      console.error('Error processing return:', error);
-      showToast('Failed to process return. See console for details.', 'error');
+      console.error('Return processing failed:', error);
+      showToast('Failed to process return', 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  // Helper for resetting to initial state for a new return
-  const startNewReturn = () => {
-    setStep(1);
-    setSearchQuery('');
+  const resetProcess = () => {
     setOriginalSale(null);
     setReturnableItems([]);
     setTotalRefundAmount(0);
-    setReturnReason(ReturnReason.OTHER);
-    setRefundMethod(PaymentMethod.CASH);
-    setCustomer(null);
-    setReturnId(null); // Clear returnId on new return
-  }
-
-  // Handle Download PDF for Return Receipt
-  const handleDownloadReturnPdf = async () => {
-    if (!receiptRef.current || !originalSale) {
-      showToast(\"Return receipt content is not available to save as PDF.\", 'error');
-      return;
-    }
-    const defaultFileName = `return-receipt-${returnId}-${format(new Date(), 'yyyyMMdd')}.pdf`;
-    receiptRef.current.classList.add('bg-white'); // Temporarily add a white background
-    try {
-      await generateAndSavePdfFromHtml(receiptRef.current, defaultFileName);
-      showToast('Return receipt PDF saved successfully!', 'success');
-    } catch (error) {
-      console.error(\"Return receipt PDF download failed:\", error);
-      showToast('Failed to save Return receipt PDF.', 'error');
-    } finally {
-      receiptRef.current.classList.remove('bg-white');
-    }
+    setSearchQuery('');
+    setStep(1);
+    setProcessedReturnId(null);
   };
 
-  // Handle Download Image for Return Receipt
-  const handleDownloadReturnImage = async () => {
-    if (!receiptRef.current || !originalSale) {
-      showToast(\"Return receipt content is not available to save as an image.\", 'error');
-      return;
-    }
-    const defaultFileName = `return-receipt-${returnId}-${format(new Date(), 'yyyyMMdd')}.png`;
-    receiptRef.current.classList.add('bg-white'); // Temporarily add a white background
-    try {
-      await saveElementAsImage(receiptRef.current, defaultFileName);
-      showToast('Return receipt image saved successfully!', 'success');
-    } catch (error) {
-      console.error(\"Return receipt image download failed:\", error);
-      showToast('Failed to save Return receipt image.', 'error');
-    } finally {
-      receiptRef.current.classList.remove('bg-white');
-    }
-  };
-
-  // Handle Print for Return Receipt
-  const handlePrintReturnReceipt = () => {
-    if (!receiptRef.current) {
-        showToast(\"Return receipt content not found for printing.\", 'error');
-        return;
-    }
-
-    const printWindow = window.open('', '', 'height=600,width=800');
-    if (printWindow) {
-        printWindow.document.write('<html><head><title>Return Receipt</title>');
-        // Inject current styles (tailwind, print.css)
-        const styles = document.querySelectorAll('link[rel=\"stylesheet\"], style');
-        styles.forEach(style => {
-            printWindow.document.write(style.outerHTML);
-        });
-        printWindow.document.write('</head><body>');
-        // Manually copy the content, excluding the download/print buttons if any were inside the ref
-        printWindow.document.write('<div style=\"width: 80mm; margin: auto; padding: 10px;\">'); // Basic styling for fixed width
-        printWindow.document.write(receiptRef.current.innerHTML);
-        printWindow.document.write('</div></body></html>');
-        printWindow.document.close();
-        printWindow.focus();
-        printWindow.print();
-        printWindow.close();
-        showToast('Printing return receipt...', 'info');
-    } else {
-        showToast('Failed to open print window. Please allow pop-ups.', 'error');
-    }
-  };
-
+  // Recent Returns Query
+  const recentReturns = useLiveQuery(() => 
+    db.returns.orderBy('returnDate').reverse().limit(10).toArray()
+  );
 
   return (
-    <div className=\"space-y-6\">
-      <h1 className=\"text-2xl font-bold text-slate-800\">Process Returns</h1>
-
-      {/* Step 1: Search Sale */}
-      {step === 1 && (
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200\">
-          <h2 className=\"text-lg font-semibold text-slate-700 mb-4\">Find Original Sale</h2>
-          <div className=\"flex gap-3 items-center\">
-            <div className=\"relative flex-1\">
-              <Search className=\"absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4\" />
-              <input
-                type=\"text\"
-                className=\"w-full pl-10 pr-4 py-2 rounded-lg bg-white border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none\"
-                placeholder=\"Enter Sale ID, Customer Name, or Invoice Number\"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') handleSearchSale();
-                }}
-              />
-            </div>
-            <button
-              onClick={handleSearchSale}
-              className=\"px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2\"
-            >
-              <Search className=\"w-4 h-4\" /> Search
-            </button>
-          </div>
-          <p className=\"mt-4 text-sm text-slate-500\">You can also search by customer name, invoice number, or date range (future implementation).</p>
+    <div className="space-y-4 md:space-y-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-xl md:text-2xl font-bold text-slate-800">Returns & Refunds</h1>
+          <p className="text-xs md:text-sm text-slate-500">Process product returns and manage refunds</p>
         </div>
-      )}
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="w-full md:w-auto px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 text-sm font-medium hover:bg-slate-50 flex items-center justify-center gap-2"
+        >
+          {showHistory ? <Plus className="w-4 h-4" /> : <History className="w-4 h-4" />}
+          {showHistory ? 'Process New Return' : 'View Return History'}
+        </button>
+      </div>
 
-      {/* Step 2: Select Items */}
-      {step === 2 && originalSale && (
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200\">
-          <h2 className=\"text-lg font-semibold text-slate-700 mb-4\">Sale Details & Select Items for Return</h2>
-
-          {/* Sale Info Summary */}
-          <div className=\"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6 text-sm text-slate-700\">
-            <div>
-              <p><strong>Sale ID:</strong> #{originalSale.id}</p>
-              <p><strong>Invoice No:</strong> {originalSale.invoiceNumber || 'N/A'}</p>
-              <p><strong>Date:</strong> {format(originalSale.date, 'MMM dd, yyyy HH:mm')}</p>
-            </div>
-            <div>
-              <p><strong>Customer:</strong> {originalSale.customerName || 'Walk-in Customer'}</p>
-              <p><strong>Payment Method:</strong> {originalSale.paymentMethod}</p>
-              <p><strong>Cashier:</strong> {currentUser?.username || 'N/A'}</p>
-            </div>
-            <div className=\"text-right md:text-left\">
-              <p><strong>Original Amount:</strong> ₦{originalSale.totalAmount.toLocaleString()}</p>
-              <p><strong>Discount:</strong> ₦{originalSale.discount.toLocaleString()}</p>
-              <p className=\"text-lg font-bold\"><strong>Final Amount:</strong> ₦{originalSale.finalAmount.toLocaleString()}</p>
-            </div>
-          </div>
-
-          {/* Action buttons */}
-          <div className=\"flex gap-2 mb-4\">
-            <button
-              onClick={handleReturnAllItems}
-              className=\"px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium\"
-            >
-              <RotateCcw className=\"w-4 h-4\" /> Return All Items
-            </button>
-          </div>
-
-          {/* Returnable Items Table */}
-          <div className=\"overflow-x-auto overflow-y-hidden mb-6\">
-            <table className=\"min-w-full divide-y divide-slate-200 text-sm\">
-              <thead className=\"bg-slate-50 hidden md:table-header-group\">
-                <tr>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Product</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Max Returnable</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Price</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Return Qty</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Status</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Refund</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Actions</th>
-                </tr>
-              </thead>
-              <tbody className=\"bg-white divide-y divide-slate-200\">
-                {returnableItems.map((item) => {
-                  const originalSoldItem = originalSale.items.find(saleItem => saleItem.productId === item.productId);
-                  const alreadyReturned = originalSoldItem?.returnedQuantity || 0;
-                  const maxReturnable = item.quantity - alreadyReturned;
-                  return (
-                    <React.Fragment key={item.productId}>
-                      {/* Desktop Row */}
-                      <tr className=\"hidden md:table-row\">
-                        <td className=\"px-3 py-2 whitespace-nowrap\">{item.productName}</td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">{maxReturnable}</td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">₦{item.price.toLocaleString()}</td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">
-                          <input
-                            type=\"number\"
-                            min=\"0\"
-                            max={maxReturnable}
-                            value={item.returnedQuantity}
-                            onChange={(e) =>
-                              handleQuantityChange(
-                                item.productId,
-                                parseInt(e.target.value),
-                                originalSoldItem || item
-                              )
-                            }
-                            className=\"w-20 border border-slate-300 rounded-md p-1 text-center\"
-                          />
-                        </td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">
-                          <select
-                            value={item.restockStatus}
-                            onChange={(e) =>
-                              handleRestockStatusChange(
-                                item.productId,
-                                e.target.value as 'restocked' | 'damaged'
-                              )
-                            }
-                            className=\"border border-slate-300 rounded-md p-1\"
-                          >
-                            <option value=\"restocked\">Restock</option>
-                            <option value=\"damaged\">Damaged</option>
-                          </select>
-                        </td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">
-                          ₦{(item.returnedQuantity * item.price).toLocaleString()}
-                        </td>
-                        <td className=\"px-3 py-2 whitespace-nowrap\">
-                            <button
-                              onClick={() => handleReturnAllOfThisItem(item.productId)}
-                              className=\"text-xs text-blue-600 hover:underline\"
-                              disabled={maxReturnable <= 0}
-                            >
-                              Return All
-                            </button>
+      {showHistory ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
+          <div className="lg:col-span-2 space-y-6">
+            <ReturnAnalytics />
+            
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
+                <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wider text-xs">
+                  <RotateCcw className="w-4 h-4 text-orange-500" /> Recent Returns
+                </h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-widest font-black">
+                    <tr>
+                      <th className="p-4">ID</th>
+                      <th className="p-4">Date</th>
+                      <th className="p-4">Customer</th>
+                      <th className="p-4">Refund</th>
+                      <th className="p-4">Method</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {recentReturns?.map(ret => (
+                      <tr key={ret.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-mono text-xs text-slate-400">#{ret.id}</td>
+                        <td className="p-4 text-slate-600 whitespace-nowrap">{format(ret.returnDate, 'MMM dd, HH:mm')}</td>
+                        <td className="p-4 font-bold text-slate-700 truncate max-w-[150px]">{ret.customerName}</td>
+                        <td className="p-4 font-black text-red-600">₦{ret.totalRefundAmount.toLocaleString()}</td>
+                        <td className="p-4">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-[10px] font-bold text-slate-600 border border-slate-200">{ret.paymentMethod}</span>
                         </td>
                       </tr>
-
-                      {/* Mobile Card */}
-                      <tr className=\"md:hidden\">
-                        <td colSpan={7} className=\"px-0 py-4\">
-                          <div className=\"bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3\">
-                            <div className=\"flex justify-between items-start\">
-                              <span className=\"font-bold text-slate-800\">{item.productName}</span>
-                              <span className=\"text-xs font-medium bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full\">
-                                ₦{item.price.toLocaleString()} / unit
-                              </span>
-                            </div>
-
-                            <div className=\"grid grid-cols-2 gap-4\">
-                              <div>
-                                <label className=\"text-[10px] uppercase text-slate-500 font-bold\">Return Qty</label>
-                                <div className=\"flex items-center gap-2 mt-1\">
-                                  <input
-                                    type=\"number\"
-                                    min=\"0\"
-                                    max={maxReturnable}
-                                    value={item.returnedQuantity}
-                                    onChange={(e) =>
-                                      handleQuantityChange(
-                                        item.productId,
-                                        parseInt(e.target.value),
-                                        originalSoldItem || item
-                                      )
-                                    }
-                                    className=\"w-full border border-slate-300 rounded-md p-2 text-center bg-white\"
-                                  />
-                                  <button
-                                    onClick={() => handleReturnAllOfThisItem(item.productId)}
-                                    className=\"text-[10px] bg-blue-100 text-blue-700 px-2 py-2 rounded font-bold uppercase whitespace-nowrap\"
-                                    disabled={maxReturnable <= 0}
-                                  >
-                                    Max
-                                  </button>
-                                </div>
-                                <p className=\"text-[10px] text-slate-400 mt-1\">Max: {maxReturnable} available</p>
-                              </div>
-
-                              <div>
-                                <label className=\"text-[10px] uppercase text-slate-500 font-bold\">Status</label>
-                                <select
-                                  value={item.restockStatus}
-                                  onChange={(e) =>
-                                    handleRestockStatusChange(
-                                      item.productId,
-                                      e.target.value as 'restocked' | 'damaged'
-                                    )
-                                  }
-                                  className=\"w-full mt-1 border border-slate-300 rounded-md p-2 bg-white text-sm\"
-                                >
-                                  <option value=\"restocked\">Restock</option>
-                                  <option value=\"damaged\">Damaged</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            <div className=\"flex justify-between items-center pt-2 border-t border-slate-200\">
-                              <span className=\"text-xs text-slate-500 italic\">Subtotal Refund:</span>
-                              <span className=\"font-bold text-indigo-600\">₦{(item.returnedQuantity * item.price).toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+                    ))}
+                    {recentReturns?.length === 0 && (
+                      <tr><td colSpan={5} className="p-8 text-center text-slate-400 italic">No returns found.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-
-          <div className=\"flex justify-between mt-6\">
-            <button
-              onClick={() => startNewReturn()}
-              className=\"px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg\"
-            >
-              <X className=\"w-4 h-4 inline-block mr-2\" /> Cancel
-            </button>
-            <button
-              onClick={() => setStep(3)}
-              disabled={returnableItems.every((item) => item.returnedQuantity === 0)}
-              className=\"px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2\"
-            >
-              Next <ChevronRight className=\"w-4 h-4\" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Choose Refund Method & Reason */}
-      {step === 3 && originalSale && (
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200\">
-          <h2 className=\"text-lg font-semibold text-slate-700 mb-4\">Refund Details</h2>
-
-          <div className=\"flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-200 pb-4 mb-4\">
-            <label htmlFor=\"returnReason\" className=\"block text-sm font-medium text-slate-700 min-w-[120px]\">Reason for Return:</label>
-            <select
-              id=\"returnReason\"
-              value={returnReason}
-              onChange={(e) => setReturnReason(e.target.value as ReturnReason)}
-              className=\"flex-1 border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none max-w-sm\"
-            >
-              {Object.values(ReturnReason).map((reason) => (
-                <option key={reason} value={reason}>{reason}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className=\"flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6\">
-            <label htmlFor=\"refundMethod\" className=\"block text-sm font-medium text-slate-700 min-w-[120px]\">Refund Method:</label>
-            <select
-              id=\"refundMethod\"
-              value={refundMethod}
-              onChange={(e) => setRefundMethod(e.target.value as PaymentMethod)}
-              className=\"flex-1 border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none max-w-sm\"
-            >
-              <option value={PaymentMethod.CASH}>Cash</option>
-              <option value={PaymentMethod.STORE_CREDIT}>Store Credit</option>
-              <option value={PaymentMethod.CARD}>POS Reversal / Card</option>
-              <option value={PaymentMethod.TRANSFER}>Bank Transfer</option>
-            </select>
-          </div>
-
-          <div className=\"flex justify-between items-center mt-6 p-4 bg-indigo-50 rounded-lg\">
-            <h3 className=\"text-xl font-bold text-indigo-700\">Total Refund:</h3>
-            <span className=\"text-3xl font-extrabold text-indigo-800\">₦{totalRefundAmount.toLocaleString()}</span>
-          </div>
-
-          <div className=\"flex justify-between mt-6\">
-            <button
-              onClick={() => setStep(2)}
-              className=\"px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-2\"
-            >
-              <ChevronLeft className=\"w-4 h-4\" /> Back
-            </button>
-            <button
-              onClick={() => setStep(4)}
-              disabled={!returnReason || totalRefundAmount === 0}
-              className=\"px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2\"
-            >
-              Next <ChevronRight className=\"w-4 h-4\" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 4: Review & Confirm */}
-      {step === 4 && originalSale && (
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200\">
-          <h2 className=\"text-lg font-semibold text-slate-700 mb-4\">Review & Confirm Return</h2>
           
-          {/* Sale Info Summary */}
-          <div className=\"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6 text-sm text-slate-700 border-b pb-4\">
-            <div>
-              <p><strong>Sale ID:</strong> #{originalSale.id}</p>
-              <p><strong>Invoice No:</strong> {originalSale.invoiceNumber || 'N/A'}</p>
-              <p><strong>Date:</strong> {format(originalSale.date, 'MMM dd, yyyy HH:mm')}</p>
-            </div>
-            <div>
-              <p><strong>Customer:</strong> {originalSale.customerName || 'Walk-in Customer'}</p>
-              <p><strong>Original Payment:</strong> {originalSale.paymentMethod}</p>
-              <p><strong>Cashier:</strong> {currentUser?.username || 'N/A'}</p>
-            </div>
-            <div className=\"text-right md:text-left\">
-              <p><strong>Refund Method:</strong> {refundMethod}</p>
-              <p><strong>Return Reason:</strong> {returnReason}</p>
-            </div>
+          <div className="space-y-6">
+             <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-2xl p-6 text-white shadow-xl shadow-indigo-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm"><Receipt className="w-6 h-6" /></div>
+                  <h3 className="text-lg font-bold">Policy Reminder</h3>
+                </div>
+                <ul className="space-y-3 text-indigo-100 text-sm">
+                  <li className="flex gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 text-indigo-300" /> Verify receipt ID before processing</li>
+                  <li className="flex gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 text-indigo-300" /> Inspect items for damage carefully</li>
+                  <li className="flex gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 text-indigo-300" /> Restocked items go back to inventory</li>
+                  <li className="flex gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 text-indigo-300" /> Damaged items are logged as loss</li>
+                </ul>
+             </div>
+          </div>
+        </div>
+      ) : (
+        <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+          {/* Step indicator */}
+          <div className="flex items-center justify-between px-4">
+            {[1, 2, 3].map((s) => (
+              <div key={s} className="flex items-center gap-2">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${step >= s ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-200 text-slate-400'}`}>
+                  {step > s ? <Check className="w-4 h-4" /> : s}
+                </div>
+                <span className={`text-xs font-bold uppercase tracking-wider hidden sm:block ${step === s ? 'text-indigo-600' : 'text-slate-400'}`}>
+                  {s === 1 ? 'Search' : s === 2 ? 'Select Items' : 'Complete'}
+                </span>
+                {s < 3 && <div className={`w-12 h-0.5 ${step > s ? 'bg-indigo-600' : 'bg-slate-200'}`} />}
+              </div>
+            ))}
           </div>
 
-          {/* Items to be Returned */}
-          <div className=\"overflow-x-auto overflow-y-hidden mb-6\">
-            <h3 className=\"font-medium text-slate-700 mb-2\">Items to Return:</h3>
-            <table className=\"min-w-full divide-y divide-slate-200 text-sm\">
-              <thead className=\"bg-slate-50 hidden md:table-header-group\">
-                <tr>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Product</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Return Qty</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Status</th>
-                  <th className=\"px-3 py-2 text-left font-medium text-slate-500 uppercase tracking-wider\">Refund</th>
-                </tr>
-              </thead>
-              <tbody className=\"bg-white divide-y divide-slate-200\">
-                {returnableItems.filter(item => item.returnedQuantity > 0).map((item) => (
-                  <React.Fragment key={item.productId}>
-                    {/* Desktop Row */}
-                    <tr className=\"hidden md:table-row\">
-                      <td className=\"px-3 py-2 whitespace-nowrap\">{item.productName}</td>
-                      <td className=\"px-3 py-2 whitespace-nowrap\">{item.returnedQuantity}</td>
-                      <td className=\"px-3 py-2 whitespace-nowrap capitalize\">{item.restockStatus}</td>
-                      <td className=\"px-3 py-2 whitespace-nowrap\">
-                        ₦{(item.returnedQuantity * item.price).toLocaleString()}
-                      </td>
-                    </tr>
+          {/* Step 1: Search Sale */}
+          {step === 1 && (
+            <div className="bg-white p-6 md:p-10 rounded-2xl shadow-xl border border-slate-100 text-center space-y-6">
+              <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4 ring-8 ring-indigo-50/50">
+                <Search className="w-10 h-10" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-black text-slate-800">Find Original Sale</h2>
+                <p className="text-slate-500">Enter the Sale ID or Customer Name from the receipt</p>
+              </div>
+              <form onSubmit={handleSearchSale} className="max-w-md mx-auto flex gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. 1045 or John Doe..."
+                  className="flex-1 p-4 rounded-xl bg-slate-50 border-2 border-slate-100 focus:border-indigo-500 outline-none transition-all font-bold text-lg"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="p-4 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all active:scale-95 flex items-center justify-center"
+                >
+                  <ArrowRight className="w-6 h-6" />
+                </button>
+              </form>
+            </div>
+          )}
 
-                    {/* Mobile Card */}
-                    <tr className=\"md:hidden\">
-                      <td colSpan={4} className=\"px-0 py-2\">
-                        <div className=\"bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between items-center\">
-                          <div>
-                            <p className=\"font-bold text-slate-800 text-sm\">{item.productName}</p>
-                            <p className=\"text-xs text-slate-500\">{item.returnedQuantity} units • <span className=\"capitalize\">{item.restockStatus}</span></p>
-                          </div>
-                          <div className=\"text-right\">
-                            <p className=\"font-bold text-indigo-600\">₦{(item.returnedQuantity * item.price).toLocaleString()}</p>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  </React.Fragment>
+          {/* Step 2: Select Items */}
+          {step === 2 && originalSale && (
+            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="text-base md:text-lg font-semibold text-slate-700 mb-3 md:mb-4">Select Items for Return</h2>
+
+              {/* Sale Info Summary */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 mb-4 md:mb-6 text-xs md:text-sm text-slate-700 bg-slate-50 p-3 md:p-4 rounded-lg">
+                <div>
+                  <p><strong>Sale ID:</strong> #{originalSale.id}</p>
+                  <p><strong>Date:</strong> {format(originalSale.date, 'MMM dd, yyyy')}</p>
+                </div>
+                <div>
+                  <p className="truncate"><strong>Customer:</strong> {originalSale.customerName || 'Walk-in'}</p>
+                  <p><strong>Method:</strong> {originalSale.paymentMethod}</p>
+                </div>
+                <div className="sm:text-right">
+                  <p className="text-base md:text-lg font-bold text-indigo-600"><strong>Total:</strong> ₦{originalSale.finalAmount.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={handleReturnAllItems}
+                  className="flex-1 md:flex-none px-3 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-2 text-xs font-bold uppercase"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Return All
+                </button>
+                <button
+                  onClick={resetProcess}
+                  className="px-3 py-2 text-slate-500 hover:text-slate-700 text-xs font-bold uppercase"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {/* Item Selection List */}
+              <div className="space-y-3 md:space-y-4 max-h-[40vh] overflow-y-auto pr-2 mb-6">
+                {returnableItems.map((item) => (
+                  <div key={item.productId} className="flex flex-col md:flex-row md:items-center gap-3 p-3 md:p-4 border rounded-xl hover:border-indigo-300 transition-colors">
+                    <div className="flex-1">
+                      <h4 className="font-bold text-slate-800 text-sm uppercase">{item.productName}</h4>
+                      <p className="text-[10px] md:text-xs text-slate-500 mt-1">
+                        Sold: {item.quantity} units @ ₦{item.price.toLocaleString()}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {/* Quantity Controls */}
+                      <div className="flex items-center bg-slate-100 rounded-lg p-1 border">
+                        <button onClick={() => updateItemReturnQty(item.productId, item.returnedQuantity - 1)} className="p-1 hover:bg-white hover:text-red-500 rounded text-slate-400"><Minus className="w-3.5 h-3.5" /></button>
+                        <span className="w-10 text-center text-sm font-black">{item.returnedQuantity}</span>
+                        <button onClick={() => updateItemReturnQty(item.productId, item.returnedQuantity + 1)} className="p-1 hover:bg-white hover:text-indigo-600 rounded text-slate-400"><Plus className="w-3.5 h-3.5" /></button>
+                      </div>
+
+                      {/* Status Selector */}
+                      <div className="flex p-1 bg-slate-100 rounded-lg">
+                        <button
+                          onClick={() => updateItemStatus(item.productId, 'restocked')}
+                          className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${item.restockStatus === 'restocked' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                          Restock
+                        </button>
+                        <button
+                          onClick={() => updateItemStatus(item.productId, 'damaged')}
+                          className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${item.restockStatus === 'damaged' ? 'bg-red-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                          Damaged
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
 
-          <div className=\"flex justify-between items-center mt-6 p-4 bg-indigo-50 rounded-lg\">
-            <h3 className=\"text-xl font-bold text-indigo-700\">Total Refund:</h3>
-            <span className=\"text-3xl font-extrabold text-indigo-800\">₦{totalRefundAmount.toLocaleString()}</span>
-          </div>
+              {/* Refund Footer */}
+              <div className="border-t pt-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+                  <div className="w-full md:w-64 space-y-3">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Refund Method</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => setRefundMethod(PaymentMethod.CASH)} className={`px-3 py-2 rounded-lg text-xs font-bold border transition-all ${refundMethod === PaymentMethod.CASH ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>Cash</button>
+                      <button onClick={() => setRefundMethod(PaymentMethod.TRANSFER)} className={`px-3 py-2 rounded-lg text-xs font-bold border transition-all ${refundMethod === PaymentMethod.TRANSFER ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>Transfer</button>
+                    </div>
+                  </div>
 
-          <div className=\"flex justify-between mt-6\">
-            <button
-              onClick={() => setStep(3)}
-              className=\"px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-2\"
-            >
-              <ChevronLeft className=\"w-4 h-4\" /> Back
-            </button>
-            <button
-              onClick={handleProcessReturn}
-              className=\"px-6 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2 text-lg font-semibold\"
-            >
-              <RotateCcw className=\"w-5 h-5\" /> Confirm & Process Return
-            </button>
-          </div>
-        </div>
-      )}
+                  <div className="w-full md:text-right space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Refund Amount</p>
+                    <p className="text-3xl font-black text-red-600">₦{totalRefundAmount.toLocaleString()}</p>
+                    <button
+                      onClick={handleProcessReturn}
+                      disabled={isProcessing || totalRefundAmount <= 0}
+                      className="mt-4 w-full md:w-auto px-10 py-4 bg-red-600 text-white rounded-xl font-black shadow-xl shadow-red-100 hover:bg-red-700 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2"
+                    >
+                      {isProcessing ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <RotateCcw className="w-5 h-5" />}
+                      Process Refund
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
-      {/* Step 5: Print Return Receipt */}
-      {step === 5 && originalSale && ( // Ensure originalSale is available for receipt
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-center\">
-          <CheckCircle className=\"w-16 h-16 text-emerald-500 mx-auto mb-4\" />
-          <h2 className=\"text-2xl font-bold text-slate-800 mb-2\">Return Processed!</h2>
-          <p className=\"text-slate-600 mb-6\">Refund of ₦{totalRefundAmount.toLocaleString()} completed successfully.</p>
-          
-          <div className=\"mb-6\">
-            <ReturnReceiptDisplay
-              ref={receiptRef}
-              originalSale={originalSale}
-              returnItems={returnableItems}
-              totalRefundAmount={totalRefundAmount}
-              returnReason={returnReason}
-              refundMethod={refundMethod}
-              customer={customer}
-              cashierUsername={currentUser?.username || 'N/A'}
-              returnDate={new Date()} // Use current date for return receipt
-              returnId={returnId}
-            />
-          </div>
+          {/* Step 3: Success & Receipt */}
+          {step === 3 && (
+            <div className="space-y-6">
+              <div className="bg-white p-8 md:p-12 rounded-3xl shadow-2xl border border-slate-100 text-center">
+                <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 ring-8 ring-emerald-50/50">
+                  <CheckCircle2 className="w-12 h-12" />
+                </div>
+                <h2 className="text-3xl font-black text-slate-800 mb-2">Refund Successful!</h2>
+                <p className="text-slate-500 mb-8">The return has been processed and stock records updated.</p>
+                
+                <div className="flex flex-col sm:flex-row justify-center gap-3 no-print">
+                  <button onClick={() => window.print()} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-all"><Receipt className="w-5 h-5" /> Print Receipt</button>
+                  <button onClick={resetProcess} className="px-8 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all">New Return</button>
+                </div>
+              </div>
 
-          <div className=\"flex justify-center gap-3 mt-6\">
-            <button
-                onClick={handleDownloadReturnPdf}
-                className=\"flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors\"
-            >
-                <Download className=\"w-4 h-4\" /> Save PDF
-            </button>
-            <button
-                onClick={handleDownloadReturnImage}
-                className=\"flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors\"
-            >
-                <ImageIcon className=\"w-4 h-4\" /> Save Image
-            </button>
-          </div>
-
-          <button
-            onClick={startNewReturn}
-            className=\"px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 mx-auto text-lg font-semibold mt-6\"
-          >
-            <RotateCcw className=\"w-5 h-5\" /> Start New Return
-          </button>
-        </div>
-      )}
-
-      {/* Fallback for when no sale is found and search was performed */}
-      {step === 1 && searchQuery && !originalSale && (
-        <div className=\"bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-center text-slate-500\">
-          <p>No sale found matching \"{searchQuery}\". Please try again.</p>
+              {/* Receipt Preview */}
+              <div className="max-w-md mx-auto">
+                <ReturnReceiptDisplay
+                  ref={returnReceiptRef}
+                  originalSale={originalSale!}
+                  returnItems={returnableItems}
+                  totalRefundAmount={totalRefundAmount}
+                  returnReason="Standard Return"
+                  refundMethod={refundMethod}
+                  customer={null}
+                  cashierUsername={currentUser?.username || 'Unknown'}
+                  returnDate={new Date()}
+                  returnId={processedReturnId}
+                  paperSize={paperSize}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

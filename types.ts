@@ -64,7 +64,6 @@ export interface Sale {
   customerId?: number; // This will need to map to customer's supabase_id for online sync
   customerName?: string; // denormalized for easier reporting
   date: Date;
-  invoiceNumber?: string; // New: Added for tracking and search
   totalAmount: number;
   discount: number;
   finalAmount: number;

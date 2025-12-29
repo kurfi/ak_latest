@@ -44,7 +44,7 @@ class AKAlheriChemistDB extends Dexie {
       customers: '++id, supabase_id, name, phone, email, currentDebt, updated_at',
       products: '++id, supabase_id, name, barcode, category, price, minStockLevel, updated_at',
       batches: '++id, supabase_id, productId, batchNumber, expiryDate, updated_at',
-      sales: '++id, supabase_id, customerId, date, paymentMethod, status, invoiceNumber, updated_at',
+      sales: '++id, supabase_id, customerId, date, paymentMethod, status, updated_at',
       expenses: '++id, supabase_id, date, category, amount, updated_at',
       settings: '&key', // '&' for unique index and primary key
       customerPayments: '++id, supabase_id, customerId, date, updated_at',
