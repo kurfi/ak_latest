@@ -636,9 +636,8 @@ const Inventory: React.FC = () => {
                 <input
                   className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50 cursor-not-allowed text-[10px] md:text-xs"
                   placeholder="Automatically Generated"
-                  readOnly // Make it read-only
+                  readOnly 
                   value={batchForm.batchNumber}
-                  onChange={e => setBatchForm({ ...batchForm, batchNumber: e.target.value })}
                 />
               </div>
 
@@ -785,7 +784,7 @@ const Inventory: React.FC = () => {
                 <input
                   className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   value={batchForm.batchNumber}
-                  onChange={e => setAddUserForm(p => ({ ...p, username: e.target.value, error: '' }))} // THIS IS WRONG but keeping it to match what was there if it was there
+                  onChange={e => setBatchForm({ ...batchForm, batchNumber: e.target.value })}
                 />
               </div>
 
