@@ -118,10 +118,14 @@ const Customers: React.FC = () => {
       }
 
       try {
-          await (db as any).transaction('rw', db.customers, db.customerPayments, db.auditLogs, async () => {
+          await db.transaction('rw', [db.customers, db.customerPayments, db.auditLogs], async () => {
+              // Fetch fresh customer data to avoid stale debt value
+              const customer = await db.customers.get(selectedCustomer.id!);
+              if (!customer) throw new Error("Customer not found");
+
               // Record payment
               await db.customerPayments.add({
-                  customerId: selectedCustomer.id!,
+                  customerId: customer.id!,
                   date: new Date(),
                   amount: amount,
                   paymentMethod: repayForm.method,
@@ -129,24 +133,25 @@ const Customers: React.FC = () => {
               });
 
               // Deduct debt
-              const newDebt = (selectedCustomer.currentDebt || 0) - amount;
-              await db.customers.update(selectedCustomer.id!, {
-                  currentDebt: newDebt < 0 ? 0 : newDebt
+              const newDebt = (customer.currentDebt || 0) - amount;
+              await db.customers.update(customer.id!, {
+                  currentDebt: newDebt < 0 ? 0 : newDebt,
+                  updated_at: new Date().toISOString()
               });
 
               // Audit Log
               await logAudit(
                 'REPAY_DEBT',
-                `Repaid ₦${amount} for customer ${selectedCustomer.name} via ${repayForm.method}`,
+                `Repaid ₦${amount} for customer ${customer.name} via ${repayForm.method}`,
                 currentUser?.username || 'Unknown'
               );
           });
 
           setIsRepayModalOpen(false);
-          alert("Repayment recorded successfully!");
+          showToast("Repayment recorded successfully!", 'success');
       } catch (error) {
           console.error("Repayment failed", error);
-          alert("Failed to record repayment.");
+          showToast("Failed to record repayment.", 'error');
       }
   };
 
