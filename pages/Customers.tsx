@@ -1,214 +1,334 @@
-
 import React, { useState } from 'react';
-import { db, logAudit } from '../db/db';
-import { Customer, UserRole, PaymentMethod } from '../types';
+import { db, deleteCustomer, logAudit } from '../db/db';
+import { Customer, Sale, CustomerPayment, PaymentMethod, UserRole } from '../types';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Search, UserPlus, Phone, Mail, CreditCard, History, X, Edit, Trash2, ArrowRight } from 'lucide-react';
+import { UserPlus, Mail, Phone, X, History, Upload, Download, Pencil, Wallet, Trash2, Search } from 'lucide-react'; // Import Search icon
+import { format } from 'date-fns';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 const Customers: React.FC = () => {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
-  const [searchTerm, setSearchTerm] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isRepayModalOpen, setIsRepayModalOpen] = useState(false);
+  
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerSales, setCustomerSales] = useState<Sale[]>([]);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
+  const [activeHistoryTab, setActiveHistoryTab] = useState<'purchases' | 'repayments'>('purchases');
   
   const [newCustomer, setNewCustomer] = useState<Partial<Customer>>({
-    name: '',
-    phone: '',
-    email: '',
     creditLimit: 0,
     currentDebt: 0
   });
-
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [searchQuery, setSearchQuery] = useState(''); // New state for search query
+
   const [repayForm, setRepayForm] = useState({
-    amount: '',
-    method: PaymentMethod.CASH,
-    note: ''
+      amount: '',
+      method: PaymentMethod.CASH,
+      note: ''
   });
 
-  const customers = useLiveQuery(async () => {
-    if (searchTerm) {
-      return await db.customers.where('name').startsWithIgnoreCase(searchTerm).or('phone').startsWith(searchTerm).toArray();
+  // Filter out Walk-in Customer from the management list
+  const customers = useLiveQuery(() => {
+    if (!db.customers) return [];
+    let query = db.customers.where('name').notEqual('Walk-in Customer');
+
+    if (searchQuery) {
+      const lowerCaseQuery = searchQuery.toLowerCase();
+      return query.filter(customer =>
+        customer.name.toLowerCase().includes(lowerCaseQuery) ||
+        customer.phone.includes(lowerCaseQuery) ||
+        customer.email?.toLowerCase().includes(lowerCaseQuery)
+      ).toArray();
     }
-    return await db.customers.toArray();
-  }, [searchTerm]);
+    return query.toArray();
+  }, [searchQuery]);
 
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
+    if (newCustomer.name && newCustomer.phone) {
       await db.customers.add({
-        name: newCustomer.name!,
-        phone: newCustomer.phone!,
+        name: newCustomer.name,
+        phone: newCustomer.phone,
         email: newCustomer.email || '',
         creditLimit: Number(newCustomer.creditLimit) || 0,
-        currentDebt: 0,
-        createdAt: new Date()
-      });
+        currentDebt: 0
+      } as Customer);
       setIsAddModalOpen(false);
-      setNewCustomer({ name: '', phone: '', email: '', creditLimit: 0 });
-      showToast('Customer added successfully', 'success');
-    } catch (error) {
-      showToast('Failed to add customer', 'error');
+      setNewCustomer({ creditLimit: 0, currentDebt: 0 });
     }
+  };
+
+  const handleOpenEditModal = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setIsEditModalOpen(true);
   };
 
   const handleUpdateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCustomer) return;
+    if (!editingCustomer || !editingCustomer.id) return;
+
     try {
-      await db.customers.update(editingCustomer.id!, {
+      await db.customers.update(editingCustomer.id, {
         name: editingCustomer.name,
         phone: editingCustomer.phone,
         email: editingCustomer.email,
-        creditLimit: Number(editingCustomer.creditLimit)
+        creditLimit: Number(editingCustomer.creditLimit) || 0,
       });
       setIsEditModalOpen(false);
       setEditingCustomer(null);
-      showToast('Customer updated successfully', 'success');
     } catch (error) {
-      showToast('Failed to update customer', 'error');
+      console.error("Failed to update customer:", error);
+      alert("Failed to update customer details.");
     }
+  };
+
+  const handleViewHistory = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    if (customer.id) {
+        const sales = await db.sales.where('customerId').equals(customer.id).reverse().toArray();
+        const payments = await db.customerPayments.where('customerId').equals(customer.id).reverse().toArray();
+        setCustomerSales(sales);
+        setCustomerPayments(payments);
+        setIsHistoryModalOpen(true);
+        setActiveHistoryTab('purchases');
+    }
+  };
+
+  const handleOpenRepayModal = (customer: Customer) => {
+      setSelectedCustomer(customer);
+      setRepayForm({ amount: '', method: PaymentMethod.CASH, note: '' });
+      setIsRepayModalOpen(true);
   };
 
   const handleRepayDebt = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedCustomer) return;
-    const repayAmount = parseFloat(repayForm.amount);
-    
-    if (isNaN(repayAmount) || repayAmount <= 0) {
-      showToast('Please enter a valid amount', 'error');
+      e.preventDefault();
+      if (!selectedCustomer || !selectedCustomer.id || !repayForm.amount) return;
+
+      const amount = parseFloat(repayForm.amount);
+      if (amount <= 0 || amount > selectedCustomer.currentDebt) {
+          alert("Please enter a valid amount less than or equal to the current debt.");
+          return;
+      }
+
+      try {
+          await (db as any).transaction('rw', db.customers, db.customerPayments, db.auditLogs, async () => {
+              // Record payment
+              await db.customerPayments.add({
+                  customerId: selectedCustomer.id!,
+                  date: new Date(),
+                  amount: amount,
+                  paymentMethod: repayForm.method,
+                  note: repayForm.note
+              });
+
+              // Deduct debt
+              const newDebt = (selectedCustomer.currentDebt || 0) - amount;
+              await db.customers.update(selectedCustomer.id!, {
+                  currentDebt: newDebt < 0 ? 0 : newDebt
+              });
+
+              // Audit Log
+              await logAudit(
+                'REPAY_DEBT',
+                `Repaid ₦${amount} for customer ${selectedCustomer.name} via ${repayForm.method}`,
+                currentUser?.username || 'Unknown'
+              );
+          });
+
+          setIsRepayModalOpen(false);
+          alert("Repayment recorded successfully!");
+      } catch (error) {
+          console.error("Repayment failed", error);
+          alert("Failed to record repayment.");
+      }
+  };
+
+  const handleDeleteCustomer = async (customerId: number) => {
+    if (currentUser?.role !== UserRole.ADMIN) {
+      showToast('Access Denied: Only admins can delete customers.', 'error');
       return;
     }
 
-    if (repayAmount > selectedCustomer.currentDebt) {
-      showToast('Repayment amount exceeds current debt', 'error');
-      return;
-    }
+    const confirmation = window.confirm('Are you sure you want to delete this customer? This action cannot be undone.');
 
-    try {
-      await db.transaction('rw', [db.customers, db.sales, db.auditLogs], async () => {
-        // 1. Update Customer Debt
-        const newDebt = selectedCustomer.currentDebt - repayAmount;
-        await db.customers.update(selectedCustomer.id!, { currentDebt: newDebt });
-
-        // 2. Log payment as a special sale entry for reports
-        await db.sales.add({
-          date: new Date(),
-          items: [{
-            productId: 0,
-            productName: 'DEBT_REPAYMENT',
-            quantity: 1,
-            price: repayAmount,
-            total: repayAmount
-          }],
-          totalAmount: repayAmount,
-          discount: 0,
-          finalAmount: repayAmount,
-          paymentMethod: repayForm.method,
-          customerName: selectedCustomer.name,
-          customerId: selectedCustomer.id,
-          status: 'completed',
-          note: repayForm.note || 'Debt repayment'
-        });
-
-        await logAudit(
-          'DEBT_REPAYMENT',
-          `Customer ${selectedCustomer.name} repaid ₦${repayAmount} via ${repayForm.method}`,
-          currentUser?.username || 'Unknown'
-        );
-      });
-
-      setIsRepayModalOpen(false);
-      setRepayForm({ amount: '', method: PaymentMethod.CASH, note: '' });
-      showToast('Payment recorded successfully', 'success');
-    } catch (error) {
-      showToast('Failed to record payment', 'error');
+    if (confirmation) {
+      try {
+        await deleteCustomer(customerId);
+        showToast('Customer deleted successfully.', 'success');
+        await logAudit('DELETE_CUSTOMER', `Deleted customer ID: ${customerId}`, currentUser?.username || 'Unknown');
+      } catch (error) {
+        console.error('Failed to delete customer:', error);
+        showToast('Failed to delete customer.', 'error');
+      }
     }
   };
 
+  const downloadTemplate = () => {
+    const headers = "Name,Phone,Email,CreditLimit,CurrentDebt\nJohn Doe,08012345678,john@example.com,50000,0";
+    const blob = new Blob([headers], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'customers_template.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+        const text = event.target?.result as string;
+        const lines = text.split('\n');
+        const customersToAdd: Partial<Customer>[] = [];
+
+        // Skip header row (index 0)
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            const [name, phone, email, creditLimit, currentDebt] = line.split(',');
+
+            if (name && phone) {
+                customersToAdd.push({
+                    name: name.trim(),
+                    phone: phone.trim(),
+                    email: email?.trim() || '',
+                    creditLimit: parseFloat(creditLimit) || 0,
+                    currentDebt: parseFloat(currentDebt) || 0
+                });
+            }
+        }
+
+        if (customersToAdd.length > 0) {
+            try {
+                await db.customers.bulkAdd(customersToAdd as Customer[]);
+                alert(`Successfully imported ${customersToAdd.length} customers.`);
+                setIsBulkModalOpen(false);
+            } catch (error) {
+                console.error("Import failed", error);
+                alert("Import failed. Please check your CSV format.");
+            }
+        } else {
+            alert("No valid customers found in file.");
+        }
+    };
+    reader.readAsText(file);
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <h1 className="text-2xl font-bold text-slate-800">Customer Management</h1>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 flex items-center gap-2 shadow-sm font-medium transition-colors"
-        >
-          <UserPlus className="w-4 h-4" /> Add Customer
-        </button>
+    <div className="space-y-4 md:space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <h1 className="text-xl md:text-2xl font-bold text-slate-800">Customers</h1>
+        <div className="flex-1 min-w-0 md:max-w-xs relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <input 
+                className="w-full pl-10 pr-4 py-2 md:py-2.5 rounded-lg bg-white border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-sm"
+                placeholder="Search customers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+            />
+        </div>
+        <div className="flex gap-2">
+             <button 
+                onClick={() => setIsBulkModalOpen(true)}
+                className="flex-1 md:flex-none bg-white text-slate-700 border border-slate-200 px-3 py-1.5 md:px-4 md:py-2 rounded-lg hover:bg-slate-50 flex items-center justify-center gap-2 shadow-sm transition-colors text-xs md:text-sm"
+            >
+                <Upload className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                Import CSV
+            </button>
+            <button 
+                onClick={() => setIsAddModalOpen(true)}
+                className="flex-1 md:flex-none bg-slate-900 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg hover:bg-slate-800 flex items-center justify-center gap-2 shadow-sm text-xs md:text-sm font-medium"
+            >
+                <UserPlus className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                Add Customer
+            </button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-200">
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-            <input
-              type="text"
-              placeholder="Search by name or phone..."
-              className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 text-slate-500 text-sm uppercase tracking-wider">
-              <tr>
-                <th className="p-4 font-medium">Customer Name</th>
-                <th className="p-4 font-medium">Contact</th>
-                <th className="p-4 font-medium">Credit Limit</th>
-                <th className="p-4 font-medium">Current Debt</th>
-                <th className="p-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {customers?.map((customer) => (
-                <tr key={customer.id} className="hover:bg-slate-50 transition-colors group">
-                  <td className="p-4 font-medium text-slate-800">{customer.name}</td>
-                  <td className="p-4 text-slate-600">
-                    <div className="flex flex-col text-xs gap-1">
-                      <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {customer.phone}</span>
-                      {customer.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {customer.email}</span>}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+        {customers?.map(customer => (
+            <div key={customer.id} className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col transition-all hover:shadow-md">
+                <div className="flex items-center gap-3 md:gap-4 mb-3 md:mb-4">
+                    <div className="w-10 h-10 md:w-12 md:h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold text-lg md:text-xl shrink-0">
+                        {customer.name.charAt(0)}
                     </div>
-                  </td>
-                  <td className="p-4 text-slate-600">₦{customer.creditLimit.toLocaleString()}</td>
-                  <td className="p-4">
-                    <span className={`font-bold ${customer.currentDebt > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                      ₦{customer.currentDebt.toLocaleString()}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right">
-                    <div className="flex justify-end gap-2">
-                      {customer.currentDebt > 0 && (
-                        <button
-                          onClick={() => { setSelectedCustomer(customer); setIsRepayModalOpen(true); }}
-                          className="p-2 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors"
-                          title="Repay Debt"
+                    <div className="min-w-0">
+                        <h3 className="font-bold text-slate-800 truncate text-sm md:text-base">{customer.name}</h3>
+                        <p className="text-[10px] md:text-xs text-slate-500">ID: {customer.id}</p>
+                    </div>
+                </div>
+                <div className="space-y-1.5 md:space-y-2 text-xs md:text-sm text-slate-600 mb-4 md:mb-6">
+                    <div className="flex items-center gap-2">
+                        <Phone className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400" />
+                        {customer.phone}
+                    </div>
+                    {customer.email && (
+                        <div className="flex items-center gap-2">
+                            <Mail className="w-3.5 h-3.5 md:w-4 md:h-4 text-slate-400" />
+                            {customer.email}
+                        </div>
+                    )}
+                </div>
+                <div className="mt-auto pt-3 md:pt-4 border-t border-slate-100 flex flex-col gap-2.5 md:gap-3">
+                    <div className="flex justify-between items-center">
+                        <div>
+                            <p className="text-[10px] md:text-xs text-slate-400">Current Debt</p>
+                            <p className={`font-bold text-base md:text-xl ${customer.currentDebt > 0 ? 'text-red-500' : 'text-slate-700'}`}>
+                                ₦{customer.currentDebt.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                            </p>
+                        </div>
+                        {customer.currentDebt > 0 && (
+                            <button 
+                                onClick={() => handleOpenRepayModal(customer)}
+                                className="px-2.5 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-md text-[10px] md:text-xs font-bold hover:bg-emerald-100 flex items-center gap-1"
+                            >
+                                <Wallet className="w-3 h-3" /> Repay
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-2 w-full">
+                        <button 
+                            onClick={() => handleOpenEditModal(customer)}
+                            className="flex-1 py-1.5 md:py-2 bg-slate-50 text-slate-600 text-xs md:text-sm font-medium rounded-lg hover:bg-slate-100 flex items-center justify-center gap-1.5 md:gap-2 transition-colors"
                         >
-                          <CreditCard className="w-4 h-4" />
+                            <Pencil className="w-3 h-3" /> Edit
                         </button>
-                      )}
-                      <button 
-                        onClick={() => { setEditingCustomer(customer); setIsEditModalOpen(true); }}
-                        className="p-2 text-slate-400 hover:text-slate-900 transition-colors"
-                        title="Edit"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
+                        <button 
+                            onClick={() => handleViewHistory(customer)}
+                            className="flex-1 py-1.5 md:py-2 bg-slate-50 text-slate-600 text-xs md:text-sm font-medium rounded-lg hover:bg-slate-100 flex items-center justify-center gap-1.5 md:gap-2 transition-colors"
+                        >
+                            <History className="w-3.5 h-3.5 md:w-4 md:h-4" /> History
+                        </button>
+                        {currentUser?.role === UserRole.ADMIN && (
+                            <button 
+                                onClick={() => handleDeleteCustomer(customer.id!)}
+                                className="flex-1 py-1.5 md:py-2 bg-red-50 text-red-600 text-xs md:text-sm font-medium rounded-lg hover:bg-red-100 flex items-center justify-center gap-1.5 md:gap-2 transition-colors"
+                            >
+                                <Trash2 className="w-3 h-3" /> Delete
+                            </button>
+                        )}
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                </div>
+            </div>
+        ))}
+        
+        {customers?.length === 0 && (
+             <div className="col-span-full text-center py-10 text-slate-400">
+                 No customers found. Add one to get started.
+             </div>
+        )}
       </div>
 
       {/* Add Customer Modal */}
@@ -326,6 +446,52 @@ const Customers: React.FC = () => {
         </div>
       )}
 
+      {/* Bulk Import Modal */}
+      {isBulkModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+                  <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-xl font-bold text-slate-800">Bulk Import Customers</h2>
+                      <button onClick={() => setIsBulkModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                  </div>
+                  
+                  <div className="space-y-6">
+                      <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                          <h3 className="font-medium text-slate-800 mb-2 flex items-center gap-2"><Download className="w-4 h-4" /> Step 1: Get Template</h3>
+                          <p className="text-sm text-slate-500 mb-3">Download the CSV template to see the required format.</p>
+                          <button 
+                            onClick={downloadTemplate}
+                            className="text-sm text-indigo-600 font-medium hover:underline"
+                          >
+                            Download Template.csv
+                          </button>
+                      </div>
+
+                      <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                          <h3 className="font-medium text-slate-800 mb-2 flex items-center gap-2"><Upload className="w-4 h-4" /> Step 2: Upload CSV</h3>
+                          <p className="text-sm text-slate-500 mb-3">Select your filled CSV file to import.</p>
+                          <input 
+                            type="file" 
+                            accept=".csv"
+                            onChange={handleBulkImport}
+                            className="block w-full text-sm text-slate-500
+                              file:mr-4 file:py-2 file:px-4
+                              file:rounded-full file:border-0
+                              file:text-sm file:font-semibold
+                              file:bg-indigo-50 file:text-indigo-700
+                              hover:file:bg-indigo-100
+                            "
+                          />
+                      </div>
+                  </div>
+                  
+                  <div className="mt-6 flex justify-end">
+                      <button onClick={() => setIsBulkModalOpen(false)} className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg">Close</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Repay Debt Modal */}
       {isRepayModalOpen && selectedCustomer && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
@@ -382,6 +548,120 @@ const Customers: React.FC = () => {
                         <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs md:text-sm font-bold">Confirm Payment</button>
                     </div>
                 </form>
+            </div>
+          </div>
+      )}
+
+      {/* History Modal */}
+      {isHistoryModalOpen && selectedCustomer && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col">
+               <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                   <div>
+                       <h2 className="text-xl font-bold text-slate-800">{selectedCustomer.name}</h2>
+                       <p className="text-sm text-slate-500">Customer History</p>
+                   </div>
+                   <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+               </div>
+
+               <div className="flex border-b border-slate-100">
+                   <button 
+                        onClick={() => setActiveHistoryTab('purchases')}
+                        className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${activeHistoryTab === 'purchases' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
+                   >
+                       Purchases
+                   </button>
+                   <button 
+                        onClick={() => setActiveHistoryTab('repayments')}
+                        className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${activeHistoryTab === 'repayments' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
+                   >
+                       Debt Repayments
+                   </button>
+               </div>
+               
+               <div className="p-6 overflow-y-auto flex-1">
+                   {activeHistoryTab === 'purchases' ? (
+                       <div className="overflow-x-auto">
+                           <table className="w-full text-left text-sm">
+                               <thead className="text-slate-500 border-b border-slate-100">
+                                   <tr>
+                                       <th className="pb-3 font-medium">Date</th>
+                                       <th className="pb-3 font-medium">Ref ID</th>
+                                       <th className="pb-3 font-medium">Items</th>
+                                       <th className="pb-3 font-medium text-right">Amount</th>
+                                   </tr>
+                               </thead>
+                               <tbody className="divide-y divide-slate-50">
+                                   {customerSales.map(sale => (
+                                       <tr key={sale.id}>
+                                           <td className="py-3 text-slate-600">{format(sale.date, 'MMM dd, yyyy')}</td>
+                                           <td className="py-3 text-slate-400">#{sale.id}</td>
+                                           <td className="py-3 text-slate-600">{sale.items.length} items</td>
+                                           <td className="py-3 text-right font-bold text-slate-800">
+                                               ₦{sale.finalAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                           </td>
+                                       </tr>
+                                   ))}
+                                   {customerSales.length === 0 && (
+                                       <tr>
+                                           <td colSpan={4} className="py-8 text-center text-slate-400">No purchase history found.</td>
+                                       </tr>
+                                   )}
+                               </tbody>
+                           </table>
+                       </div>
+                   ) : (
+                       <div className="overflow-x-auto">
+                           <table className="w-full text-left text-sm">
+                               <thead className="text-slate-500 border-b border-slate-100">
+                                   <tr>
+                                       <th className="pb-3 font-medium">Date</th>
+                                       <th className="pb-3 font-medium">Method</th>
+                                       <th className="pb-3 font-medium">Note</th>
+                                       <th className="pb-3 font-medium text-right">Amount Repaid</th>
+                                   </tr>
+                               </thead>
+                               <tbody className="divide-y divide-slate-50">
+                                   {customerPayments.map(payment => (
+                                       <tr key={payment.id}>
+                                           <td className="py-3 text-slate-600">{format(payment.date, 'MMM dd, yyyy')}</td>
+                                           <td className="py-3 text-slate-600">
+                                               <span className="px-2 py-1 rounded-full bg-slate-100 text-xs font-medium text-slate-600">{payment.paymentMethod}</span>
+                                           </td>
+                                           <td className="py-3 text-slate-500 italic">{payment.note || '-'}</td>
+                                           <td className="py-3 text-right font-bold text-emerald-600">
+                                               ₦{payment.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                           </td>
+                                       </tr>
+                                   ))}
+                                   {customerPayments.length === 0 && (
+                                       <tr>
+                                           <td colSpan={4} className="py-8 text-center text-slate-400">No repayment history found.</td>
+                                       </tr>
+                                   )}
+                               </tbody>
+                           </table>
+                       </div>
+                   )}
+               </div>
+               
+               <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-xl flex justify-between items-center">
+                    {activeHistoryTab === 'purchases' ? (
+                        <>
+                            <div className="text-slate-500 text-sm">Total Purchases: {customerSales.length}</div>
+                            <div className="text-slate-800 font-bold">
+                                Total Spent: ₦{customerSales.reduce((acc, s) => acc + s.finalAmount, 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                             <div className="text-slate-500 text-sm">Total Repayments: {customerPayments.length}</div>
+                             <div className="text-slate-800 font-bold">
+                                 Total Repaid: ₦{customerPayments.reduce((acc, p) => acc + p.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                             </div>
+                        </>
+                    )}
+               </div>
             </div>
           </div>
       )}
