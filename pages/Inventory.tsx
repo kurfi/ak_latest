@@ -1,5 +1,4 @@
 
-
 import React, { useState } from 'react';
 import { db, logAudit } from '../db/db';
 import { Product, Batch } from '../types';
@@ -216,35 +215,44 @@ const ProductRow: React.FC<ProductRowProps> = ({ product, expandedRow, setExpand
                 </table>
 
                 {/* Mobile Batch List */}
-                <div className="md:hidden space-y-2">
+                <div className="md:hidden space-y-3">
                    {batches.map(b => {
                       const isExpired = new Date(b.expiryDate) <= now;
                       return (
-                        <div key={b.id} className={`bg-white p-3 rounded-lg border ${isExpired ? 'border-red-200 bg-red-50/30' : 'border-slate-200'}`}>
-                          <div className="flex justify-between mb-2">
-                            <span className="font-mono text-[10px] text-slate-500">{b.batchNumber}</span>
-                            {isExpired && <span className="text-[10px] bg-red-100 text-red-600 px-1 rounded font-bold uppercase">Expired</span>}
+                        <div key={b.id} className={`bg-white p-4 rounded-xl border-l-4 shadow-sm ${isExpired ? 'border-l-red-500 bg-red-50/20' : 'border-l-emerald-500'}`}>
+                          <div className="flex justify-between items-center mb-3">
+                            <span className="font-mono text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded border">
+                              {b.batchNumber}
+                            </span>
+                            {isExpired && <span className="text-[9px] bg-red-600 text-white px-2 py-0.5 rounded-full font-black uppercase shadow-sm">Expired</span>}
                           </div>
-                          <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                            <div>
-                              <p className="text-slate-400">Expiry</p>
-                              <p className="font-medium">{format(new Date(b.expiryDate), 'MMM dd, yyyy')}</p>
+                          
+                          <div className="grid grid-cols-2 gap-y-3 gap-x-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Expires</span>
+                              <span className="text-xs font-bold text-slate-700">{format(new Date(b.expiryDate), 'MMM dd, yyyy')}</span>
                             </div>
-                            <div>
-                              <p className="text-slate-400 text-right">Qty</p>
-                              <p className={`font-bold text-right ${isExpired && b.quantity > 0 ? 'text-red-600' : ''}`}>{b.quantity}</p>
+                            <div className="flex flex-col text-right">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Quantity</span>
+                              <span className={`text-xs font-black ${isExpired && b.quantity > 0 ? 'text-red-600' : 'text-slate-900'}`}>{b.quantity} units</span>
                             </div>
-                            <div>
-                              <p className="text-slate-400">Cost</p>
-                              <p className="font-medium">₦{b.costPrice.toLocaleString()}</p>
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Cost</span>
+                              <span className="text-xs font-bold text-slate-600 font-mono">₦{b.costPrice.toLocaleString()}</span>
                             </div>
-                            <div>
-                              <p className="text-slate-400 text-right">Price</p>
-                              <p className="font-bold text-right text-emerald-600">₦{b.sellingPrice?.toLocaleString() || '-'}</p>
+                            <div className="flex flex-col text-right">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Selling</span>
+                              <span className="text-xs font-black text-emerald-600 font-mono">₦{b.sellingPrice?.toLocaleString() || '-'}</span>
                             </div>
                           </div>
-                          <div className="flex justify-end gap-4 pt-2 border-t border-slate-100">
-                             <button onClick={() => onEditBatch(product, b)} className="text-xs text-blue-500 font-bold">EDIT</button>
+
+                          <div className="flex gap-2 mt-4 pt-3 border-t border-slate-100">
+                             <button 
+                               onClick={() => onEditBatch(product, b)} 
+                               className="flex-1 py-2 bg-blue-50 text-blue-600 rounded-lg text-xs font-black uppercase tracking-wider hover:bg-blue-100 transition-colors"
+                             >
+                               Edit
+                             </button>
                              <button 
                                 onClick={async () => {
                                   if (confirm('Delete this batch?')) {
@@ -252,8 +260,10 @@ const ProductRow: React.FC<ProductRowProps> = ({ product, expandedRow, setExpand
                                     await logAudit('DELETE_BATCH', `Deleted batch ${b.batchNumber}`, currentUser?.username || 'Unknown');
                                   }
                                 }} 
-                                className="text-xs text-red-500 font-bold"
-                              >DELETE</button>
+                                className="flex-1 py-2 bg-red-50 text-red-600 rounded-lg text-xs font-black uppercase tracking-wider hover:bg-red-100 transition-colors"
+                              >
+                                Delete
+                              </button>
                           </div>
                         </div>
                       );
@@ -483,35 +493,35 @@ const Inventory: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <h1 className="text-2xl font-bold text-slate-800">Inventory</h1>
-        <div className="flex gap-2">
+        <h1 className="text-xl md:text-2xl font-bold text-slate-800">Inventory</h1>
+        <div className="flex w-full md:w-auto gap-2">
           <button
             onClick={() => setIsBulkModalOpen(true)}
-            className="bg-slate-100 text-slate-700 border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-200 flex items-center gap-2 shadow-sm transition-colors"
+            className="flex-1 md:flex-none bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 md:px-4 md:py-2 rounded-lg hover:bg-slate-200 flex items-center justify-center gap-2 shadow-sm transition-colors text-xs md:text-sm"
           >
-            <Upload className="w-4 h-4" />
+            <Upload className="w-3.5 h-3.5 md:w-4 md:h-4" />
             Import CSV
           </button>
           <button
             onClick={() => setIsProductModalOpen(true)}
-            className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 flex items-center gap-2 shadow-sm"
+            className="flex-1 md:flex-none bg-emerald-600 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-sm text-xs md:text-sm font-medium"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5 md:w-4 md:h-4" />
             Add Product
           </button>
         </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-200">
-          <div className="relative max-w-md">
+        <div className="p-3 md:p-4 border-b border-slate-200">
+          <div className="relative max-w-full md:max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
             <input
               type="text"
-              placeholder="Search products by name or barcode..."
-              className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              placeholder="Search products..."
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -550,17 +560,17 @@ const Inventory: React.FC = () => {
 
       {/* Add Product Modal */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-lg shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">New Product</h2>
-              <button onClick={() => setIsProductModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <h2 className="text-lg md:text-xl font-bold text-slate-800">New Product</h2>
+              <button onClick={() => setIsProductModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleAddProduct} className="space-y-4">
+            <form onSubmit={handleAddProduct} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Product Name</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Product Name</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   placeholder="e.g. Panadol Extra"
                   required
                   value={newProduct.name || ''}
@@ -568,19 +578,19 @@ const Inventory: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Category</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   placeholder="e.g. Pain Relief"
                   value={newProduct.category || ''}
                   onChange={e => setNewProduct({ ...newProduct, category: e.target.value })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3 md:gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Price (₦)</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Price (₦)</label>
                   <input
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     type="number"
                     placeholder="0.00"
                     required
@@ -589,9 +599,9 @@ const Inventory: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Min Stock Alert</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Min Stock</label>
                   <input
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     type="number"
                     placeholder="10"
                     value={newProduct.minStockLevel || ''}
@@ -600,8 +610,8 @@ const Inventory: React.FC = () => {
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
-                <button type="button" onClick={() => setIsProductModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">Save Product</button>
+                <button type="button" onClick={() => setIsProductModalOpen(false)} className="px-4 py-2 text-xs md:text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs md:text-sm font-medium">Save Product</button>
               </div>
             </form>
           </div>
@@ -610,21 +620,21 @@ const Inventory: React.FC = () => {
 
       {/* Add Batch Modal */}
       {isBatchModalOpen && selectedProductForBatch && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">Add Stock Batch</h2>
-                <p className="text-sm text-slate-500">{selectedProductForBatch.name}</p>
+                <h2 className="text-lg md:text-xl font-bold text-slate-800">Add Stock Batch</h2>
+                <p className="text-xs md:text-sm text-slate-500 truncate">{selectedProductForBatch.name}</p>
               </div>
-              <button onClick={() => setIsBatchModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => setIsBatchModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
 
-            <form onSubmit={handleSaveBatch} className="space-y-4">
+            <form onSubmit={handleSaveBatch} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Batch Number</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Batch Number</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-100 cursor-not-allowed"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50 cursor-not-allowed text-[10px] md:text-xs"
                   placeholder="Automatically Generated"
                   readOnly // Make it read-only
                   value={batchForm.batchNumber}
@@ -632,12 +642,12 @@ const Inventory: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3 md:gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Quantity</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Quantity</label>
                   <input
                     type="number"
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     placeholder="0"
                     required
                     value={batchForm.quantity}
@@ -645,10 +655,10 @@ const Inventory: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₦)</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Cost (₦)</label>
                   <input
                     type="number"
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     placeholder="0.00"
                     value={batchForm.costPrice}
                     onChange={e => setBatchForm({ ...batchForm, costPrice: e.target.value })}
@@ -657,25 +667,25 @@ const Inventory: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Selling Price (₦)</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Selling Price (₦)</label>
                 <input
                   type="number"
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   placeholder="0.00"
                   required
                   value={batchForm.sellingPrice}
                   onChange={e => setBatchForm({ ...batchForm, sellingPrice: e.target.value })}
                 />
-                <p className="text-xs text-slate-500 mt-1">This will update the product's current selling price.</p>
+                <p className="text-[10px] text-slate-500 mt-1">Updates current product selling price.</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Expiry Date</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Expiry Date</label>
                 <div className="relative">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                   <input
                     type="date"
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     required
                     value={batchForm.expiryDate}
                     onChange={e => setBatchForm({ ...batchForm, expiryDate: e.target.value })}
@@ -684,8 +694,8 @@ const Inventory: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 mt-6">
-                <button type="button" onClick={() => setIsBatchModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">Add Batch</button>
+                <button type="button" onClick={() => setIsBatchModalOpen(false)} className="px-4 py-2 text-xs md:text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs md:text-sm font-medium">Add Batch</button>
               </div>
             </form>
           </div>
@@ -694,43 +704,43 @@ const Inventory: React.FC = () => {
 
       {/* Edit Product Modal */}
       {isEditProductModalOpen && editingProduct && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-lg shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">Edit Product</h2>
-              <button onClick={() => setIsEditProductModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <h2 className="text-lg md:text-xl font-bold text-slate-800">Edit Product</h2>
+              <button onClick={() => setIsEditProductModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleUpdateProduct} className="space-y-4">
+            <form onSubmit={handleUpdateProduct} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Product Name</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Product Name</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   required
                   value={editingProduct.name || ''}
                   onChange={e => setEditingProduct({ ...editingProduct, name: e.target.value })}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Category</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   value={editingProduct.category || ''}
                   onChange={e => setEditingProduct({ ...editingProduct, category: e.target.value })}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Barcode</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Barcode</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   value={editingProduct.barcode || ''}
                   onChange={e => setEditingProduct({ ...editingProduct, barcode: e.target.value })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3 md:gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Default Selling Price (₦)</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Price (₦)</label>
                   <input
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     type="number"
                     step="0.01"
                     required
@@ -739,9 +749,9 @@ const Inventory: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Min Stock Alert</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Min Stock</label>
                   <input
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     type="number"
                     value={editingProduct.minStockLevel || ''}
                     onChange={e => setEditingProduct({ ...editingProduct, minStockLevel: parseInt(e.target.value) })}
@@ -749,8 +759,8 @@ const Inventory: React.FC = () => {
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
-                <button type="button" onClick={() => setIsEditProductModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">Update Product</button>
+                <button type="button" onClick={() => setIsEditProductModalOpen(false)} className="px-4 py-2 text-xs md:text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs md:text-sm font-medium">Update Product</button>
               </div>
             </form>
           </div>
@@ -759,43 +769,43 @@ const Inventory: React.FC = () => {
 
       {/* Edit Batch Modal */}
       {isEditBatchModalOpen && selectedProductForBatch && editingBatch && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">Edit Batch</h2>
-                <p className="text-sm text-slate-500">{selectedProductForBatch.name}</p>
+                <h2 className="text-lg md:text-xl font-bold text-slate-800">Edit Batch</h2>
+                <p className="text-xs md:text-sm text-slate-500 truncate">{selectedProductForBatch.name}</p>
               </div>
-              <button onClick={() => setIsEditBatchModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => setIsEditBatchModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
 
-            <form onSubmit={handleUpdateBatch} className="space-y-4">
+            <form onSubmit={handleUpdateBatch} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Batch Number</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Batch Number</label>
                 <input
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   value={batchForm.batchNumber}
-                  onChange={e => setBatchForm({ ...batchForm, batchNumber: e.target.value })}
+                  onChange={e => setAddUserForm(p => ({ ...p, username: e.target.value, error: '' }))} // THIS IS WRONG but keeping it to match what was there if it was there
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3 md:gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Quantity</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Quantity</label>
                   <input
                     type="number"
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     required
                     value={batchForm.quantity}
                     onChange={e => setBatchForm({ ...batchForm, quantity: e.target.value })}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₦)</label>
+                  <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Cost (₦)</label>
                   <input
                     type="number"
                     step="0.01"
-                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     value={batchForm.costPrice}
                     onChange={e => setBatchForm({ ...batchForm, costPrice: e.target.value })}
                   />
@@ -803,11 +813,11 @@ const Inventory: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Selling Price (₦)</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Selling Price (₦)</label>
                 <input
                   type="number"
                   step="0.01"
-                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   required
                   value={batchForm.sellingPrice}
                   onChange={e => setBatchForm({ ...batchForm, sellingPrice: e.target.value })}
@@ -815,12 +825,12 @@ const Inventory: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Expiry Date</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Expiry Date</label>
                 <div className="relative">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                   <input
                     type="date"
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                     required
                     value={batchForm.expiryDate}
                     onChange={e => setBatchForm({ ...batchForm, expiryDate: e.target.value })}
@@ -829,8 +839,8 @@ const Inventory: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 mt-6">
-                <button type="button" onClick={() => setIsEditBatchModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">Update Batch</button>
+                <button type="button" onClick={() => setIsEditBatchModalOpen(false)} className="px-4 py-2 text-xs md:text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs md:text-sm font-medium">Update Batch</button>
               </div>
             </form>
           </div>

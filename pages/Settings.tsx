@@ -1,645 +1,354 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState } from 'react';
+import { db, logAudit, clearAuditLogs } from '../db/db';
+import { User, UserRole, SyncLog } from '../types';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/db';
-import { supabase } from '../services/supabase';
+import { Shield, UserPlus, Key, Trash2, Edit, X, RefreshCw, Server, History, CheckCircle2, AlertCircle, Database, Search } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { User, UserRole, AuditLog } from '../types';
-import { Users, Plus, X, Edit, Trash2, Folder, FolderOpen, ClipboardList, Printer, Lock, Download, Calendar } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { getAppDirectory, setAppDirectory, DirectoryType, isTauri } from '../services/directoryService';
+import { format } from 'date-fns';
+import { useSync } from '../contexts/SyncContext';
 import { useToast } from '../contexts/ToastContext';
-import { format, startOfMonth, endOfMonth, parseISO } from 'date-fns';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import { savePdf } from '../services/pdfService';
 
 const Settings: React.FC = () => {
   const { currentUser } = useAuth();
-  const users = useLiveQuery(() => db.users.toArray());
-  const auditLogs = useLiveQuery(() => db.auditLogs.reverse().limit(50).toArray());
-  const syncQueue = useLiveQuery(() => db.syncQueue.reverse().limit(20).toArray());
+  const { syncStatus, lastSyncTime, syncLogs } = useSync();
   const { showToast } = useToast();
-
-  // Audit log export state
-  const [logStartDate, setLogStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-  const [logEndDate, setLogEndDate] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
-  const [isExportingLogs, setIsExportingLogs] = useState(false);
-
-  // Modal states
+  
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [isEditUserModalOpen, setIsEditUserModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
-
-  // Form states
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [addUserForm, setAddUserForm] = useState({ username: '', email: '', password: '', confirmPassword: '', role: UserRole.CASHIER, error: '' });
-  const [editUserForm, setEditUserForm] = useState({ id: 0, role: UserRole.CASHIER, password: '', confirmPassword: '', error: '' });
-  const [changePasswordForm, setChangePasswordForm] = useState({ password: '', confirmPassword: '', error: '', loading: false });
-
-  // Directory Paths State
-  const [paths, setPaths] = useState({
-    receipts: '', reports: '', exports: '', backups: ''
+  
+  const [addUserForm, setAddUserForm] = useState({
+    username: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    role: UserRole.CASHIER,
+    error: ''
   });
-  const [printerTarget, setPrinterTarget] = useState('');
 
-  useEffect(() => {
-    const loadSettings = async () => {
-      if (isTauri()) {
-        setPaths({
-          receipts: await getAppDirectory('receipts'),
-          reports: await getAppDirectory('reports'),
-          exports: await getAppDirectory('exports'),
-          backups: await getAppDirectory('backups')
-        });
-      }
-      const pt = await db.settings.get('printerTarget');
-      if (pt) setPrinterTarget(pt.value);
-    };
-    loadSettings();
-  }, []);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editUserForm, setEditUserForm] = useState({
+    role: UserRole.CASHIER,
+    password: '',
+    confirmPassword: '',
+    error: ''
+  });
 
-  const savePrinterTarget = async () => {
-    try {
-      await db.settings.put({ key: 'printerTarget', value: printerTarget });
-      showToast('Printer target saved successfully!', 'success');
-    } catch (error) {
-      console.error(error);
-      showToast('Failed to save printer target.', 'error');
-    }
-  };
+  const [changePasswordForm, setChangePasswordForm] = useState({
+    password: '',
+    confirmPassword: '',
+    loading: false,
+    error: ''
+  });
 
-  const changePath = async (type: DirectoryType) => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: paths[type]
-      });
+  const [auditLogSearch, setAuditLogSearch] = useState('');
 
-      if (selected && typeof selected === 'string') {
-        await setAppDirectory(type, selected);
-        setPaths(prev => ({ ...prev, [type]: selected }));
-      }
-    } catch (err) {
-      console.error("Failed to change path", err);
-    }
-  };
-
-  const handleOpenAddModal = () => {
-    setAddUserForm({ username: '', email: '', password: '', confirmPassword: '', role: UserRole.CASHIER, error: '' });
-    setIsAddUserModalOpen(true);
-  };
-
-  const handleOpenEditModal = (user: User) => {
-    setEditingUser(user);
-    setEditUserForm({ id: user.id!, role: user.role, password: '', confirmPassword: '', error: '' });
-    setIsEditUserModalOpen(true);
-  };
+  const users = useLiveQuery(() => db.users.toArray());
+  const auditLogs = useLiveQuery(() => 
+    auditLogSearch
+      ? db.auditLogs.where('action').startsWithIgnoreCase(auditLogSearch).or('details').startsWithIgnoreCase(auditLogSearch).reverse().limit(100).toArray()
+      : db.auditLogs.orderBy('timestamp').reverse().limit(100).toArray()
+  , [auditLogSearch]);
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { username, email, password, confirmPassword, role } = addUserForm;
-
-    if (password !== confirmPassword) {
-      setAddUserForm(prev => ({ ...prev, error: 'Passwords do not match.' }));
-      return;
-    }
-
-    const existingUser = await db.users.where('username').equalsIgnoreCase(username).first();
-    if (existingUser) {
-      setAddUserForm(prev => ({ ...prev, error: 'Username already exists.' }));
+    if (addUserForm.password !== addUserForm.confirmPassword) {
+      setAddUserForm({ ...addUserForm, error: 'Passwords do not match' });
       return;
     }
 
     try {
-      if (navigator.onLine) {
-        // Use Edge Function to create Auth User + Profile
-        // We use the default email logic if email field is empty (though validation should catch it)
-        const userEmail = email || `${username.toLowerCase().replace(/\s+/g, '')}@placeholder.com`;
-
-        const { data, error } = await supabase.functions.invoke('create-user', {
-          body: { email: userEmail, password, username, role }
-        });
-
-        if (error) throw new Error(error.message || 'Failed to connect to user creation service.');
-        if (data?.error) throw new Error(data.error);
-
-        // Add to local DB for offline access/cache (using the UUID from Auth)
-        // We do NOT store password locally as it is handled by Supabase Auth now
-        await db.users.add({
-          supabase_id: data.user.id,
-          username,
-          role,
-          updated_at: new Date().toISOString()
-        });
-
-        showToast(`User created successfully! Email: ${userEmail}`, 'success');
-      } else {
-        // Fallback to local-only
-        alert("You are offline. User will be created locally but CANNOT login until synced and credentials created manually in Supabase Dashboard.");
-        await db.users.add({ username, password, role });
+      const existing = await db.users.where('username').equals(addUserForm.username).first();
+      if (existing) {
+        setAddUserForm({ ...addUserForm, error: 'Username already exists' });
+        return;
       }
 
+      await db.users.add({
+        username: addUserForm.username,
+        email: addUserForm.email,
+        password: addUserForm.password,
+        role: addUserForm.role,
+        createdAt: new Date()
+      });
+
+      await logAudit('USER_CREATED', `Created new user: ${addUserForm.username} (${addUserForm.role})`, currentUser?.username || 'System');
+      
       setIsAddUserModalOpen(false);
-    } catch (error: any) {
-      console.error("Failed to add user:", error);
-      setAddUserForm(prev => ({ ...prev, error: error.message || 'Failed to add user.' }));
+      setAddUserForm({ username: '', email: '', password: '', confirmPassword: '', role: UserRole.CASHIER, error: '' });
+      showToast('User created successfully', 'success');
+    } catch (error) {
+      showToast('Failed to create user', 'error');
     }
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { id, role, password, confirmPassword } = editUserForm;
+    if (!editingUser) return;
 
-    if (password && password !== confirmPassword) {
-      setEditUserForm(prev => ({ ...prev, error: 'New passwords do not match.' }));
+    if (editUserForm.password && editUserForm.password !== editUserForm.confirmPassword) {
+      setEditUserForm({ ...editUserForm, error: 'Passwords do not match' });
       return;
     }
 
     try {
-      const updates: Partial<User> = { role };
-      if (password) {
-        updates.password = password;
-      }
-      await db.users.update(id, updates);
+      const updates: any = { role: editUserForm.role };
+      if (editUserForm.password) updates.password = editUserForm.password;
+
+      await db.users.update(editingUser.id!, updates);
+      await logAudit('USER_UPDATED', `Updated user: ${editingUser.username}`, currentUser?.username || 'System');
+      
       setIsEditUserModalOpen(false);
+      setEditingUser(null);
+      showToast('User updated successfully', 'success');
     } catch (error) {
-      console.error("Failed to update user:", error);
-      setEditUserForm(prev => ({ ...prev, error: 'Failed to update user.' }));
+      showToast('Failed to update user', 'error');
     }
   };
 
-  const { changePassword } = useAuth();
+  const handleDeleteUser = async (user: User) => {
+    if (user.id === currentUser?.id) {
+      showToast('Cannot delete yourself!', 'error');
+      return;
+    }
+
+    if (window.confirm(`Delete user ${user.username}?`)) {
+      await db.users.delete(user.id!);
+      await logAudit('USER_DELETED', `Deleted user: ${user.username}`, currentUser?.username || 'System');
+      showToast('User deleted', 'success');
+    }
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { password, confirmPassword } = changePasswordForm;
-
-    if (!password) {
-      setChangePasswordForm(prev => ({ ...prev, error: 'Password cannot be empty.' }));
+    if (changePasswordForm.password !== changePasswordForm.confirmPassword) {
+      setChangePasswordForm(p => ({ ...p, error: 'Passwords do not match' }));
       return;
     }
 
-    if (password !== confirmPassword) {
-      setChangePasswordForm(prev => ({ ...prev, error: 'Passwords do not match.' }));
-      return;
-    }
-
-    setChangePasswordForm(prev => ({ ...prev, loading: true, error: '' }));
+    setChangePasswordForm(p => ({ ...p, loading: true, error: '' }));
     try {
-      const result = await changePassword(password);
-      if (result.success) {
-        showToast('Password updated successfully!', 'success');
-        setIsChangePasswordModalOpen(false);
-        setChangePasswordForm({ password: '', confirmPassword: '', error: '', loading: false });
-      } else {
-        setChangePasswordForm(prev => ({ ...prev, error: result.error || 'Failed to update password.' }));
-      }
-    } catch (err: any) {
-      setChangePasswordForm(prev => ({ ...prev, error: err.message || 'An unexpected error occurred.' }));
-    } finally {
-      setChangePasswordForm(prev => ({ ...prev, loading: false }));
-    }
-  };
-
-  const handleDeleteUser = async (userId: number) => {
-    if (userId === currentUser?.id) {
-      alert("You cannot delete your own account.");
-      return;
-    }
-    if (window.confirm("Are you sure you want to delete this user? This action cannot be undone.")) {
-      try {
-        await db.users.delete(userId);
-      } catch (error) {
-        console.error("Failed to delete user:", error);
-        alert("Failed to delete user.");
-      }
-    }
-  };
-
-  const exportAuditLogs = async () => {
-    setIsExportingLogs(true);
-    try {
-      const start = parseISO(logStartDate);
-      start.setHours(0, 0, 0, 0);
-      const end = parseISO(logEndDate);
-      end.setHours(23, 59, 59, 999);
-
-      const logs = await db.auditLogs
-        .where('timestamp')
-        .between(start, end)
-        .reverse()
-        .toArray();
-
-      if (logs.length === 0) {
-        showToast('No logs found for the selected period.', 'info');
-        return;
-      }
-
-      const doc = new jsPDF();
-      doc.setFontSize(18);
-      doc.text("AK Alheri Chemist - System Audit Logs", 14, 22);
-      doc.setFontSize(11);
-      doc.setTextColor(100);
-      doc.text(`Period: ${logStartDate} to ${logEndDate}`, 14, 30);
-
-      autoTable(doc, {
-        startY: 40,
-        head: [['Timestamp', 'Action', 'Details', 'User']],
-        body: logs.map(log => [
-          format(log.timestamp, 'yyyy-MM-dd HH:mm:ss'),
-          log.action,
-          log.details,
-          log.user
-        ]),
-        headStyles: { fillColor: [71, 85, 105] }, // Slate-600
-        styles: { fontSize: 8 },
-        columnStyles: {
-          0: { cellWidth: 35 },
-          1: { cellWidth: 35 },
-          2: { cellWidth: 'auto' },
-          3: { cellWidth: 25 }
-        }
-      });
-
-      const fileName = `Audit_Logs_${logStartDate}_to_${logEndDate}.pdf`;
-      await savePdf(doc, fileName, 'reports');
-      showToast(`Audit logs exported successfully!`, 'success');
+      await db.users.update(currentUser!.id!, { password: changePasswordForm.password });
+      await logAudit('PASSWORD_CHANGED', `User ${currentUser?.username} changed their password`, currentUser?.username || 'System');
+      
+      setIsChangePasswordModalOpen(false);
+      setChangePasswordForm({ password: '', confirmPassword: '', loading: false, error: '' });
+      showToast('Password changed successfully', 'success');
     } catch (error) {
-      console.error("Failed to export audit logs:", error);
-      showToast("Failed to export audit logs.", "error");
-    } finally {
-      setIsExportingLogs(false);
+      setChangePasswordForm(p => ({ ...p, loading: false, error: 'Failed to update password' }));
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      <h1 className="text-2xl font-bold text-slate-800">Settings</h1>
+    <div className="space-y-8">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold text-slate-800">System Settings</h1>
+        <button
+          onClick={() => setIsChangePasswordModalOpen(true)}
+          className="bg-white text-slate-700 border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2 shadow-sm text-sm font-medium"
+        >
+          <Key className="w-4 h-4" /> Change My Password
+        </button>
+      </div>
 
-      {/* Security & Profile (All Users) */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-indigo-100 rounded-full">
-              <Lock className="w-6 h-6 text-indigo-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Security & Profile</h2>
-              <p className="text-slate-500 text-sm">Manage your account security and password.</p>
+      <div className="grid lg:grid-cols-2 gap-8">
+        {/* User Management */}
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Shield className="w-5 h-5 text-indigo-500" /> User Management
+            </h2>
+            <button
+              onClick={() => setIsAddUserModalOpen(true)}
+              className="text-indigo-600 hover:text-indigo-700 text-sm font-bold flex items-center gap-1"
+            >
+              <UserPlus className="w-4 h-4" /> New User
+            </button>
+          </div>
+          
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider">
+                  <tr>
+                    <th className="p-4 font-bold">Username</th>
+                    <th className="p-4 font-bold">Role</th>
+                    <th className="p-4 font-bold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {users?.map(user => (
+                    <tr key={user.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-4 font-medium text-slate-800">{user.username}</td>
+                      <td className="p-4">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${user.role === UserRole.ADMIN ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'}`}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button 
+                            onClick={() => {
+                              setEditingUser(user);
+                              setEditUserForm({ role: user.role, password: '', confirmPassword: '', error: '' });
+                              setIsEditUserModalOpen(true);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleDeleteUser(user)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-          <button
-            onClick={() => setIsChangePasswordModalOpen(true)}
-            className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-colors text-sm font-medium"
-          >
-            Change Password
-          </button>
         </div>
-        <div className="pt-4 border-t border-slate-100">
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-slate-500">Username:</span>
-            <span className="font-semibold text-slate-900">{currentUser?.username}</span>
-          </div>
-          <div className="flex justify-between items-center text-sm mt-2">
-            <span className="text-slate-500">Role:</span>
-            <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full text-xs font-bold uppercase">{currentUser?.role}</span>
+
+        {/* Sync Status */}
+        <div className="space-y-4">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <Database className="w-5 h-5 text-emerald-500" /> Cloud Synchronization
+          </h2>
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
+            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <div className="flex items-center gap-4">
+                <div className={`p-3 rounded-full ${syncStatus === 'syncing' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                  <RefreshCw className={`w-6 h-6 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900 uppercase tracking-tight">Status: {syncStatus.toUpperCase()}</p>
+                  <p className="text-xs text-slate-500">Last Synced: {lastSyncTime ? format(lastSyncTime, 'MMM dd, HH:mm:ss') : 'Never'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <History className="w-3.5 h-3.5" /> Recent Sync Activities
+              </h3>
+              <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                {syncLogs && syncLogs.length > 0 ? (
+                  syncLogs.map((log: SyncLog, i: number) => (
+                    <div key={i} className="flex items-center justify-between p-2.5 bg-white border border-slate-100 rounded-lg text-[11px]">
+                      <div className="flex items-center gap-2">
+                        {log.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <AlertCircle className="w-3.5 h-3.5 text-red-500" />}
+                        <span className="font-bold text-slate-700">{log.entity.toUpperCase()}</span>
+                        <span className="text-slate-400">({log.operation})</span>
+                      </div>
+                      <span className="text-slate-400 font-mono">{format(log.timestamp, 'HH:mm:ss')}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-center py-8 text-slate-400 text-xs italic">No sync logs available.</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* File Path Configuration (Tauri Only) */}
-      {isTauri() && currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="p-3 bg-emerald-100 rounded-full">
-              <Folder className="w-6 h-6 text-emerald-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">File Save Locations</h2>
-              <p className="text-slate-500 text-sm">Configure where receipts, reports, and backups are saved.</p>
-            </div>
-          </div>
-          <div className="space-y-4">
-            {(['receipts', 'reports', 'exports', 'backups'] as DirectoryType[]).map(type => (
-              <div key={type} className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-slate-700 capitalize">{type} Folder</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={paths[type]}
-                    readOnly
-                    className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600 font-mono"
-                  />
-                  <button
-                    onClick={() => changePath(type)}
-                    className="p-2 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-700"
-                    title="Change Folder"
-                  >
-                    <FolderOpen className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            ))}
+      {/* Audit Logs */}
+      <div className="space-y-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <History className="w-5 h-5 text-slate-500" /> System Logs (Audit)
+          </h2>
+          <div className="relative w-full md:w-64">
+             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
+             <input 
+                placeholder="Search logs..." 
+                className="w-full pl-9 pr-4 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
+                value={auditLogSearch}
+                onChange={(e) => setAuditLogSearch(e.target.value)}
+             />
           </div>
         </div>
-      )}
-
-      {/* Hardware Configuration (Tauri Only) */}
-      {isTauri() && currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="p-3 bg-blue-100 rounded-full">
-              <Printer className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Hardware Configuration</h2>
-              <p className="text-slate-500 text-sm">Setup printers and devices.</p>
-            </div>
-          </div>
-          <div className="space-y-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-slate-700">Printer Target</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="tcp://192.168.1.100:9100 or file://COM3"
-                  value={printerTarget}
-                  onChange={(e) => setPrinterTarget(e.target.value)}
-                  className="flex-1 p-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                <button
-                  onClick={savePrinterTarget}
-                  className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 font-medium text-sm"
-                >
-                  Save
-                </button>
-              </div>
-              <p className="text-xs text-slate-500">Example: tcp://192.168.1.200:9100 (Ethernet) or file://\\.\COM3 (USB/Serial on Windows)</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* User Management (Admin Only) */}
-      {currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                <Users className="w-5 h-5 text-slate-500" />
-                User Management
-              </h2>
-              <p className="text-slate-500 text-sm">Add, edit, or remove user accounts.</p>
-            </div>
-            <button
-              onClick={handleOpenAddModal}
-              className="bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700 flex items-center gap-2 shadow-sm text-sm font-medium"
-            >
-              <Plus className="w-4 h-4" /> Add User
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-500">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto max-h-[400px]">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider sticky top-0 z-10">
                 <tr>
-                  <th className="p-3 font-medium">Username</th>
-                  <th className="p-3 font-medium">Role</th>
-                  <th className="p-3 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {users?.map(user => (
-                  <tr key={user.id}>
-                    <td className="p-3 font-medium text-slate-800">{user.username}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${user.role === UserRole.ADMIN
-                        ? 'bg-indigo-100 text-indigo-700'
-                        : 'bg-green-100 text-green-700'
-                        }`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right">
-                      <div className="flex gap-2 justify-end">
-                        <button onClick={() => handleOpenEditModal(user)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-md"><Edit className="w-4 h-4" /></button>
-                        <button
-                          onClick={() => handleDeleteUser(user.id!)}
-                          disabled={user.id === currentUser.id}
-                          className="p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* troubleshooting (Admin Only) */}
-      {currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="p-3 bg-red-100 rounded-full">
-              <ClipboardList className="w-6 h-6 text-red-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Troubleshooting</h2>
-              <p className="text-slate-500 text-sm">Force data synchronization and reset local cache.</p>
-            </div>
-          </div>
-          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg mb-4">
-            <p className="text-sm text-amber-800 font-medium">Reset & Sync</p>
-            <p className="text-xs text-amber-700 mt-1">If your products or batches are not showing correctly, use this to clear local data and pull everything fresh from the cloud. WARNING: Any unsynced local changes will be lost.</p>
-          </div>
-          <button
-            onClick={async () => {
-              if (window.confirm("Perform a Hard Reset? This will clear local data and re-pull everything from Supabase. Unsynced changes will be lost.")) {
-                const { hardResetAndSync } = await import('../services/syncService');
-                showToast("Starting hard reset...", "info");
-                await hardResetAndSync();
-                showToast("Hard reset completed!", "success");
-              }
-            }}
-            className="w-full py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold transition-colors flex items-center justify-center gap-2"
-          >
-            Hard Reset & Sync Data
-          </button>
-        </div>
-      )}
-
-      {/* Synchronization Queue (Admin Only) */}
-      {currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="p-3 bg-blue-100 rounded-full">
-              <Plus className="w-6 h-6 text-blue-600 rotate-45" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Sync Status</h2>
-              <p className="text-slate-500 text-sm">Monitoring of the cloud synchronization queue.</p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="p-3 font-medium">Table</th>
-                  <th className="p-3 font-medium">Action</th>
-                  <th className="p-3 font-medium">Status</th>
-                  <th className="p-3 font-medium">Error</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {syncQueue?.map(item => (
-                  <tr key={item.id}>
-                    <td className="p-3 font-medium text-slate-800">{item.table_name}</td>
-                    <td className="p-3 text-slate-600 uppercase">{item.action}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${
-                        item.status === 'completed' ? 'bg-green-100 text-green-700' :
-                        item.status === 'failed' ? 'bg-red-100 text-red-700' :
-                        'bg-amber-100 text-amber-700'
-                      }`}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-red-500 text-xs italic">{item.error || '-'}</td>
-                  </tr>
-                ))}
-                {syncQueue?.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="p-6 text-center text-slate-400">Sync queue is empty.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* System Logs (Admin Only) */}
-      {currentUser?.role === UserRole.ADMIN && (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-slate-100 rounded-full">
-                <ClipboardList className="w-6 h-6 text-slate-600" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">System Logs</h2>
-                <p className="text-slate-500 text-sm">Audit logs of system activities.</p>
-              </div>
-            </div>
-            
-            <div className="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-slate-400" />
-                <input
-                  type="date"
-                  value={logStartDate}
-                  onChange={(e) => setLogStartDate(e.target.value)}
-                  className="bg-transparent text-sm border-none focus:ring-0 p-0 w-28"
-                />
-                <span className="text-slate-400">-</span>
-                <input
-                  type="date"
-                  value={logEndDate}
-                  onChange={(e) => setLogEndDate(e.target.value)}
-                  className="bg-transparent text-sm border-none focus:ring-0 p-0 w-28"
-                />
-              </div>
-              <button
-                onClick={exportAuditLogs}
-                disabled={isExportingLogs}
-                className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                {isExportingLogs ? (
-                  <>Exporting...</>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4" />
-                    Export PDF
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="p-3 font-medium">Timestamp</th>
-                  <th className="p-3 font-medium">Action</th>
-                  <th className="p-3 font-medium">Details</th>
-                  <th className="p-3 font-medium text-right">User</th>
+                  <th className="p-4 font-bold">Timestamp</th>
+                  <th className="p-4 font-bold">User</th>
+                  <th className="p-4 font-bold">Action</th>
+                  <th className="p-4 font-bold">Details</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {auditLogs?.map(log => (
-                  <tr key={log.id}>
-                    <td className="p-3 text-slate-500 whitespace-nowrap">
-                      {format(log.timestamp, 'MMM dd, HH:mm:ss')}
+                  <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="p-4 text-slate-500 font-mono whitespace-nowrap">{format(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                    <td className="p-4 font-bold text-slate-700">{log.user}</td>
+                    <td className="p-4">
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded font-bold uppercase text-[9px]">
+                        {log.action}
+                      </span>
                     </td>
-                    <td className="p-3 font-medium text-slate-800">{log.action}</td>
-                    <td className="p-3 text-slate-600">{log.details}</td>
-                    <td className="p-3 text-right text-slate-500">{log.user}</td>
+                    <td className="p-4 text-slate-600 min-w-[200px]">{log.details}</td>
                   </tr>
                 ))}
-                {auditLogs?.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="p-6 text-center text-slate-400">No logs found.</td>
-                  </tr>
-                )}
               </tbody>
             </table>
-            <p className="text-[10px] text-slate-400 mt-4 italic text-center">Displaying last 50 events. Use Export to view more.</p>
+          </div>
+          <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+            <button 
+              onClick={async () => {
+                if(confirm('Clear all system logs? This cannot be undone.')) {
+                  await clearAuditLogs();
+                  showToast('Audit logs cleared', 'success');
+                }
+              }}
+              className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Clear Audit History
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Add User Modal */}
       {isAddUserModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">Add New User</h2>
-              <button onClick={() => setIsAddUserModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <h2 className="text-lg md:text-xl font-bold text-slate-800">Add New User</h2>
+              <button onClick={() => setIsAddUserModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleAddUser} className="space-y-4">
+            <form onSubmit={handleAddUser} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
-                <input required value={addUserForm.username} onChange={e => setAddUserForm(p => ({ ...p, username: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Username</label>
+                <input required value={addUserForm.username} onChange={e => setAddUserForm(p => ({ ...p, username: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email (for Login)</label>
-                <input type="email" required value={addUserForm.email} onChange={e => setAddUserForm(p => ({ ...p, email: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" placeholder="user@example.com" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Email (for Login)</label>
+                <input type="email" required value={addUserForm.email} onChange={e => setAddUserForm(p => ({ ...p, email: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg placeholder:text-slate-400 text-sm" placeholder="user@example.com" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                <input required type="password" value={addUserForm.password} onChange={e => setAddUserForm(p => ({ ...p, password: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Password</label>
+                <input required type="password" value={addUserForm.password} onChange={e => setAddUserForm(p => ({ ...p, password: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
-                <input required type="password" value={addUserForm.confirmPassword} onChange={e => setAddUserForm(p => ({ ...p, confirmPassword: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+                <input required type="password" value={addUserForm.confirmPassword} onChange={e => setAddUserForm(p => ({ ...p, confirmPassword: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
-                <select value={addUserForm.role} onChange={e => setAddUserForm(p => ({ ...p, role: e.target.value as UserRole }))} className="w-full border-slate-300 border p-2 rounded-lg bg-white">
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Role</label>
+                <select value={addUserForm.role} onChange={e => setAddUserForm(p => ({ ...p, role: e.target.value as UserRole }))} className="w-full border-slate-300 border p-2 rounded-lg bg-white text-sm">
                   <option value={UserRole.CASHIER}>Cashier</option>
                   <option value={UserRole.ADMIN}>Admin</option>
                 </select>
               </div>
-              {addUserForm.error && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{addUserForm.error}</p>}
+              {addUserForm.error && <p className="text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100">{addUserForm.error}</p>}
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => setIsAddUserModalOpen(false)} className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100">Cancel</button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 font-medium">Save User</button>
+                <button type="button" onClick={() => setIsAddUserModalOpen(false)} className="px-4 py-2 rounded-lg text-xs md:text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+                <button type="submit" className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 text-xs md:text-sm font-bold">Save User</button>
               </div>
             </form>
           </div>
@@ -648,78 +357,79 @@ const Settings: React.FC = () => {
 
       {/* Edit User Modal */}
       {isEditUserModalOpen && editingUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">Edit User: {editingUser.username}</h2>
-              <button onClick={() => setIsEditUserModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <h2 className="text-lg md:text-xl font-bold text-slate-800">Edit User: {editingUser.username}</h2>
+              <button onClick={() => setIsEditUserModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleUpdateUser} className="space-y-4">
+            <form onSubmit={handleUpdateUser} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
-                <select value={editUserForm.role} onChange={e => setEditUserForm(p => ({ ...p, role: e.target.value as UserRole }))} className="w-full border-slate-300 border p-2 rounded-lg bg-white">
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Role</label>
+                <select value={editUserForm.role} onChange={e => setEditUserForm(p => ({ ...p, role: e.target.value as UserRole }))} className="w-full border-slate-300 border p-2 rounded-lg bg-white text-sm">
                   <option value={UserRole.CASHIER}>Cashier</option>
                   <option value={UserRole.ADMIN}>Admin</option>
                 </select>
               </div>
-              <p className="text-xs text-slate-500 border-t border-slate-100 pt-4">Leave password fields blank to keep the current password.</p>
+              <p className="text-[10px] md:text-xs text-slate-500 border-t border-slate-100 pt-4 italic text-center">Leave password blank to keep current.</p>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
-                <input type="password" value={editUserForm.password} onChange={e => setEditUserForm(p => ({ ...p, password: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">New Password</label>
+                <input type="password" value={editUserForm.password} onChange={e => setEditUserForm(p => ({ ...p, password: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
-                <input type="password" value={editUserForm.confirmPassword} onChange={e => setEditUserForm(p => ({ ...p, confirmPassword: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg" />
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+                <input type="password" value={editUserForm.confirmPassword} onChange={e => setEditUserForm(p => ({ ...p, confirmPassword: e.target.value, error: '' }))} className="w-full border-slate-300 border p-2 rounded-lg text-sm" />
               </div>
-              {editUserForm.error && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{editUserForm.error}</p>}
+              {editUserForm.error && <p className="text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100">{editUserForm.error}</p>}
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => setIsEditUserModalOpen(false)} className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100">Cancel</button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 font-medium">Update User</button>
+                <button type="button" onClick={() => setIsEditUserModalOpen(false)} className="px-4 py-2 rounded-lg text-xs md:text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+                <button type="submit" className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 text-xs md:text-sm font-bold">Update User</button>
               </div>
             </form>
           </div>
         </div>
       )}
+
       {/* Change Password Modal */}
       {isChangePasswordModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 md:p-4">
+          <div className="bg-white rounded-xl p-4 md:p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[95vh]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">Change Your Password</h2>
+              <h2 className="text-lg md:text-xl font-bold text-slate-800">Change Password</h2>
               <button
                 onClick={() => setIsChangePasswordModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="p-1 text-slate-400 hover:text-slate-600"
                 disabled={changePasswordForm.loading}
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleChangePassword} className="space-y-4">
+            <form onSubmit={handleChangePassword} className="space-y-3 md:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">New Password</label>
                 <input
                   required
                   type="password"
                   value={changePasswordForm.password}
                   onChange={e => setChangePasswordForm(p => ({ ...p, password: e.target.value, error: '' }))}
-                  className="w-full border-slate-300 border p-2 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full border-slate-300 border p-2 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   placeholder="Enter new password"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
+                <label className="block text-xs md:text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
                 <input
                   required
                   type="password"
                   value={changePasswordForm.confirmPassword}
                   onChange={e => setChangePasswordForm(p => ({ ...p, confirmPassword: e.target.value, error: '' }))}
-                  className="w-full border-slate-300 border p-2 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full border-slate-300 border p-2 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   placeholder="Confirm new password"
                 />
               </div>
 
               {changePasswordForm.error && (
-                <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 italic">
+                <p className="text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 italic">
                   {changePasswordForm.error}
                 </p>
               )}
@@ -728,14 +438,14 @@ const Settings: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsChangePasswordModalOpen(false)}
-                  className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100"
+                  className="px-4 py-2 rounded-lg text-xs md:text-sm text-slate-600 hover:bg-slate-100"
                   disabled={changePasswordForm.loading}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-medium disabled:opacity-50 flex items-center gap-2"
+                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 text-xs md:text-sm font-bold disabled:opacity-50 flex items-center gap-2"
                   disabled={changePasswordForm.loading}
                 >
                   {changePasswordForm.loading ? 'Updating...' : 'Update Password'}
