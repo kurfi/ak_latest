@@ -46,13 +46,13 @@ function AppRoutes() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/pos" element={<POS />} />
               <Route path="/customers" element={<Customers />} />
+              <Route path="/settings" element={<Settings />} />
 
               {/* Admin Only Routes */}
               <Route element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]} />}>
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/expenses" element={<Expenses />} />
                 <Route path="/reports" element={<Reports />} />
-                <Route path="/settings" element={<Settings />} />
                 <Route path="/returns" element={<Returns />} /> {/* New Returns Route */}
               </Route>
 

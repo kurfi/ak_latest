@@ -23,7 +23,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     { name: 'Expenses', path: '/expenses', icon: Receipt, roles: [UserRole.ADMIN] },
     { name: 'Reports', path: '/reports', icon: PieChart, roles: [UserRole.ADMIN] },
     { name: 'Returns', path: '/returns', icon: RotateCcw, roles: [UserRole.ADMIN] }, // New Returns Nav Item
-    { name: 'Settings', path: '/settings', icon: Settings, roles: [UserRole.ADMIN] },
+    { name: 'Settings', path: '/settings', icon: Settings, roles: [UserRole.ADMIN, UserRole.CASHIER] },
   ];
 
   const availableNavItems = navItems.filter(item => currentUser && item.roles.includes(currentUser.role));
