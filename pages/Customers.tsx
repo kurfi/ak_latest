@@ -34,6 +34,29 @@ const Customers: React.FC = () => {
       note: ''
   });
 
+  const validateNigerianPhone = (phone: string): boolean => {
+    const nigerianPrefixes = ['081', '080', '091', '090', '070'];
+    const cleanPhone = phone.trim();
+    
+    if (cleanPhone.length !== 11) {
+      showToast('Phone number must be exactly 11 digits', 'error');
+      return false;
+    }
+    
+    if (!/^\d+$/.test(cleanPhone)) {
+      showToast('Phone number must contain only digits', 'error');
+      return false;
+    }
+
+    const prefix = cleanPhone.substring(0, 3);
+    if (!nigerianPrefixes.includes(prefix)) {
+      showToast('Phone number must start with 081, 080, 091, 090, or 070', 'error');
+      return false;
+    }
+
+    return true;
+  };
+
   // Filter out Walk-in Customer from the management list
   const customers = useLiveQuery(() => {
     if (!db.customers) return [];
@@ -52,17 +75,32 @@ const Customers: React.FC = () => {
 
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newCustomer.name && newCustomer.phone) {
-      await db.customers.add({
-        name: newCustomer.name,
-        phone: newCustomer.phone,
-        email: newCustomer.email || '',
-        creditLimit: Number(newCustomer.creditLimit) || 0,
-        currentDebt: 0
-      } as Customer);
-      setIsAddModalOpen(false);
-      setNewCustomer({ creditLimit: 0, currentDebt: 0 });
+    
+    if (!newCustomer.name?.trim()) {
+      showToast('Customer name is required', 'error');
+      return;
     }
+
+    if (!newCustomer.phone?.trim()) {
+      showToast('Phone number is required', 'error');
+      return;
+    }
+
+    if (!validateNigerianPhone(newCustomer.phone)) {
+      return;
+    }
+
+    await db.customers.add({
+      name: newCustomer.name.trim(),
+      phone: newCustomer.phone.trim(),
+      email: newCustomer.email?.trim() || '',
+      creditLimit: Number(newCustomer.creditLimit) || 0,
+      currentDebt: 0
+    } as Customer);
+    
+    showToast('Customer added successfully', 'success');
+    setIsAddModalOpen(false);
+    setNewCustomer({ creditLimit: 0, currentDebt: 0 });
   };
 
   const handleOpenEditModal = (customer: Customer) => {
@@ -74,18 +112,33 @@ const Customers: React.FC = () => {
     e.preventDefault();
     if (!editingCustomer || !editingCustomer.id) return;
 
+    if (!editingCustomer.name?.trim()) {
+      showToast('Customer name is required', 'error');
+      return;
+    }
+
+    if (!editingCustomer.phone?.trim()) {
+      showToast('Phone number is required', 'error');
+      return;
+    }
+
+    if (!validateNigerianPhone(editingCustomer.phone)) {
+      return;
+    }
+
     try {
       await db.customers.update(editingCustomer.id, {
-        name: editingCustomer.name,
-        phone: editingCustomer.phone,
-        email: editingCustomer.email,
+        name: editingCustomer.name.trim(),
+        phone: editingCustomer.phone.trim(),
+        email: editingCustomer.email?.trim() || '',
         creditLimit: Number(editingCustomer.creditLimit) || 0,
       });
+      showToast('Customer updated successfully', 'success');
       setIsEditModalOpen(false);
       setEditingCustomer(null);
     } catch (error) {
       console.error("Failed to update customer:", error);
-      alert("Failed to update customer details.");
+      showToast("Failed to update customer details.", 'error');
     }
   };
 
@@ -196,6 +249,7 @@ const Customers: React.FC = () => {
         const text = event.target?.result as string;
         const lines = text.split('\n');
         const customersToAdd: Partial<Customer>[] = [];
+        let skippedRows = 0;
 
         // Skip header row (index 0)
         for (let i = 1; i < lines.length; i++) {
@@ -205,27 +259,39 @@ const Customers: React.FC = () => {
             const [name, phone, email, creditLimit, currentDebt] = line.split(',');
 
             if (name && phone) {
-                customersToAdd.push({
-                    name: name.trim(),
-                    phone: phone.trim(),
-                    email: email?.trim() || '',
-                    creditLimit: parseFloat(creditLimit) || 0,
-                    currentDebt: parseFloat(currentDebt) || 0
-                });
+                const cleanPhone = phone.trim();
+                const nigerianPrefixes = ['081', '080', '091', '090', '070'];
+                
+                // Simple validation for bulk import to avoid too many toasts
+                if (cleanPhone.length === 11 && /^\d+$/.test(cleanPhone) && nigerianPrefixes.includes(cleanPhone.substring(0, 3))) {
+                    customersToAdd.push({
+                        name: name.trim(),
+                        phone: cleanPhone,
+                        email: email?.trim() || '',
+                        creditLimit: parseFloat(creditLimit) || 0,
+                        currentDebt: parseFloat(currentDebt) || 0
+                    });
+                } else {
+                    skippedRows++;
+                }
+            } else {
+                skippedRows++;
             }
         }
 
         if (customersToAdd.length > 0) {
             try {
                 await db.customers.bulkAdd(customersToAdd as Customer[]);
-                alert(`Successfully imported ${customersToAdd.length} customers.`);
+                let message = `Successfully imported ${customersToAdd.length} customers.`;
+                if (skippedRows > 0) message += ` (${skippedRows} rows skipped due to invalid data/phone format).`;
+                showToast(message, skippedRows > 0 ? 'warning' : 'success');
                 setIsBulkModalOpen(false);
             } catch (error) {
                 console.error("Import failed", error);
-                alert("Import failed. Please check your CSV format.");
+                showToast("Import failed. Please check your CSV format.", 'error');
             }
         } else {
-            alert("No valid customers found in file.");
+            showToast("No valid customers with correct phone format found.", 'error');
         }
     };
     reader.readAsText(file);
