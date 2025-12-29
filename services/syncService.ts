@@ -25,28 +25,38 @@ const supabaseTableMap: { [key: string]: string } = {
 const toSnakeCase = (str: string) => str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 const toCamelCase = (str: string) => str.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
 
-const convertKeysToSnakeCase = (obj: any) => {
-  const newObj: any = {};
-  for (const key in obj) {
-    if (key === 'updated_at' || key === 'supabase_id') {
-      newObj[key] = obj[key];
-    } else {
-      newObj[toSnakeCase(key)] = obj[key];
+const convertKeysToSnakeCase = (obj: any): any => {
+  if (Array.isArray(obj)) {
+    return obj.map(v => convertKeysToSnakeCase(v));
+  } else if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
+    const newObj: any = {};
+    for (const key in obj) {
+      if (key === 'updated_at' || key === 'supabase_id') {
+        newObj[key] = obj[key];
+      } else {
+        newObj[toSnakeCase(key)] = convertKeysToSnakeCase(obj[key]);
+      }
     }
+    return newObj;
   }
-  return newObj;
+  return obj;
 };
 
-const convertKeysToCamelCase = (obj: any) => {
-  const newObj: any = {};
-  for (const key in obj) {
-    if (key === 'updated_at' || key === 'supabase_id') {
-      newObj[key] = obj[key];
-    } else {
-      newObj[toCamelCase(key)] = obj[key];
+const convertKeysToCamelCase = (obj: any): any => {
+  if (Array.isArray(obj)) {
+    return obj.map(v => convertKeysToCamelCase(v));
+  } else if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
+    const newObj: any = {};
+    for (const key in obj) {
+      if (key === 'updated_at' || key === 'supabase_id') {
+        newObj[key] = obj[key];
+      } else {
+        newObj[toCamelCase(key)] = convertKeysToCamelCase(obj[key]);
+      }
     }
+    return newObj;
   }
-  return newObj;
+  return obj;
 };
 
 // Helper for dates in remote records
@@ -68,11 +78,6 @@ const ensureDateObjects = (dexieTableName: string, record: any) => {
     }
   });
 
-  // Always convert updated_at
-  if (record.updated_at && typeof record.updated_at === 'string') {
-    record.updated_at = record.updated_at; // keep as string or convert? 
-    // Types say updated_at is string? Let's check types.ts
-  }
   return record;
 };
 
@@ -210,6 +215,19 @@ const pushChangesToSupabase = async () => {
           const c = await db.customers.get(resolved.customerId);
           if (c?.supabase_id) resolved.customerId = c.supabase_id;
         }
+
+        // Resolve product IDs inside Sales Items array
+        if (change.table_name === 'sales' && Array.isArray(resolved.items)) {
+          resolved.items = await Promise.all(resolved.items.map(async (item: any) => {
+            const newItem = { ...item };
+            if (typeof newItem.productId === 'number') {
+              const p = await db.products.get(newItem.productId);
+              if (p?.supabase_id) newItem.productId = p.supabase_id;
+            }
+            return newItem;
+          }));
+        }
+
         if (change.table_name === 'returns') {
           if (typeof resolved.saleId === 'number') {
             const s = await db.sales.get(resolved.saleId);
@@ -393,6 +411,19 @@ const pullChangesFromSupabase = async () => {
               console.warn(`Sync Warn: Could not find customer with supabase_id ${resolved.customerId} for ${tableName} record ${record.id}`);
             }
           }
+
+          // Resolve product IDs inside Sales Items array (from Supabase UUID to local Numeric ID)
+          if (tableName === 'sales' && Array.isArray(resolved.items)) {
+            resolved.items = await Promise.all(resolved.items.map(async (item: any) => {
+              const newItem = { ...item };
+              if (typeof newItem.productId === 'string') {
+                const p = await db.products.where('supabase_id').equals(newItem.productId).first();
+                if (p) newItem.productId = p.id;
+              }
+              return newItem;
+            }));
+          }
+
           if (tableName === 'returns') {
             if (typeof resolved.saleId === 'string') {
               const s = await db.sales.where('supabase_id').equals(resolved.saleId).first();
